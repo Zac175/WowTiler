@@ -330,6 +330,7 @@ namespace WowTiler
         public long OrigStyle;
         public string ExeDir = "";          // folder of WowClassic.exe (empty if unreadable)
         public int LoginIndex = 0;          // order in which this client was first seen this session
+        public int PromoteTick = 0;         // when it was last promoted to a main slot (for multi-main rotation)
         public int Maximized = -1;          // gxMaximize from Config.wtf: 1 = "Windowed (Fullscreen)", 0 = Windowed, -1 = unknown
         public bool Fullscreen;             // gxWindow "0": exclusive fullscreen (older clients); can't be tiled at all
         public bool Ignored;                // user asked us to leave this client alone
@@ -414,6 +415,7 @@ namespace WowTiler
         public string Aspect = "16:9";          // 16:9 | 16:10 | 21:9 | 4:3 | free
         public int Monitor = 0;
         public int MainPercent = 70;
+        public int Mains = 1;                   // how many big slots (used by the "Mains ..." layouts and Custom)
         public int Gap = 0;
         public bool CoverTaskbar = false;
         public bool FillScreen = true;          // main absorbs leftover space so nothing is empty
@@ -466,6 +468,7 @@ namespace WowTiler
                         case "aspect": c.Aspect = val; break;
                         case "monitor": if (int.TryParse(val, out n)) c.Monitor = n; break;
                         case "main_percent": if (int.TryParse(val, out n)) c.MainPercent = Math.Max(40, Math.Min(90, n)); break;
+                        case "mains": if (int.TryParse(val, out n)) c.Mains = Math.Max(1, Math.Min(4, n)); break;
                         case "gap": if (int.TryParse(val, out n)) c.Gap = Math.Max(0, Math.Min(60, n)); break;
                         case "cover_taskbar": if (bool.TryParse(val, out b)) c.CoverTaskbar = b; break;
                         case "fill_screen": if (bool.TryParse(val, out b)) c.FillScreen = b; break;
@@ -519,6 +522,7 @@ namespace WowTiler
                 sb.AppendLine("aspect=" + Aspect);
                 sb.AppendLine("monitor=" + Monitor);
                 sb.AppendLine("main_percent=" + MainPercent);
+                sb.AppendLine("mains=" + Mains);
                 sb.AppendLine("gap=" + Gap);
                 sb.AppendLine("cover_taskbar=" + CoverTaskbar);
                 sb.AppendLine("fill_screen=" + FillScreen);
@@ -696,6 +700,7 @@ namespace WowTiler
         public Rectangle Canvas;
         public List<Tile> Tiles = new List<Tile>();
         public bool EditMode;
+        public int MainCount = 1;
         public double Aspect = 16.0 / 9.0;
 
         public delegate void IndexPair(int a, int b);
@@ -798,7 +803,7 @@ namespace WowTiler
                 using (var p = new Pen(hot ? Color.White : Bg)) g.DrawRectangle(p, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
                 Color tc = t.IsMain ? Bg : Fg;
                 var tr = Rectangle.Round(r); tr.Inflate(-4, -2);
-                string txt = (t.IsMain ? "MAIN\n" : (i + 1) + "\n") + t.Label;
+                string txt = (t.IsMain ? (MainCount > 1 ? "MAIN " + (i + 1) : "MAIN") + "\n" : (i + 1) + "\n") + t.Label;
                 TextRenderer.DrawText(g, txt, Font, tr, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.WordBreak);
             }
             if (EditMode)
@@ -958,16 +963,28 @@ namespace WowTiler
     // -------------------------------------------------------------------------
     class MainForm : Form
     {
-        static readonly string[] LayoutKeys = { "l_left", "l_right", "main_left", "main_right", "main_top", "main_bottom", "grid", "custom" };
+        static readonly string[] LayoutKeys = { "l_left", "l_right", "mains_top", "mains_left", "main_left", "main_right", "main_top", "main_bottom", "grid", "custom" };
         static readonly string[] LayoutNames = {
             "L-shape, main top-left (all 16:9)",
             "L-shape, main top-right (all 16:9)",
+            "Mains across the top, alts along the bottom",
+            "Mains on the left, alts stacked right",
             "Main left, alts stacked right",
             "Main right, alts stacked left",
             "Main top, alts along bottom",
             "Main bottom, alts along top",
             "Even grid",
             "Custom (draw your own in the preview)" };
+
+        // How many of the leading slots count as "mains" (big, gold, promotion targets).
+        int MainCount
+        {
+            get
+            {
+                bool multi = cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || cfg.Layout == "custom";
+                return multi ? Math.Max(1, Math.Min(cfg.Mains, Math.Max(1, order.Count))) : 1;
+            }
+        }
         static readonly string[] AspectKeys = { "16:9", "16:10", "21:9", "4:3", "free" };
         static readonly string[] AspectNames = { "16:9 (widescreen)", "16:10", "21:9 (ultrawide)", "4:3", "Free (fill the slot)" };
 
@@ -1018,7 +1035,7 @@ namespace WowTiler
         ComboBox layoutBox, aspectBox, monitorBox, methodBox;
         TrackBar mainSize;
         Label mainSizeLabel;
-        NumericUpDown gapBox;
+        NumericUpDown gapBox, mainsBox;
         CheckBox autoBox, borderBox, focusBox, topBox, taskbarBox, fillBox, raidMinBox;
         TableLayoutPanel clientTable;
         Label statusLabel;
@@ -1064,7 +1081,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.1";
+        public const string Version = "1.2";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -1185,6 +1202,13 @@ namespace WowTiler
             gapRow.Controls.Add(gapBox);
             gapRow.Controls.Add(new Label { Text = "px between windows", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 5, 0, 0) });
             AddRow(grid, ref row, "Gap", gapRow);
+
+            var mainsRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
+            mainsBox = new NumericUpDown { Minimum = 1, Maximum = 4, Width = 56, Value = Math.Max(1, Math.Min(4, cfg.Mains)) };
+            mainsBox.ValueChanged += delegate { SettingChanged(); };
+            mainsRow.Controls.Add(mainsBox);
+            mainsRow.Controls.Add(new Label { Text = "big slots (for the 'Mains ...' and Custom layouts)", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 5, 0, 0) });
+            AddRow(grid, ref row, "Mains", mainsRow);
 
             var reserve = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
             reserveTop = ReserveBox(cfg.ReserveTop); reserveBottom = ReserveBox(cfg.ReserveBottom);
@@ -1359,14 +1383,14 @@ namespace WowTiler
             preview.Monitors = InvolvedMonitors();
             preview.Canvas = CanvasRect();
             preview.Aspect = ParseAspect(cfg.Aspect);
+            preview.MainCount = MainCount;
             preview.EditMode = preview.EditMode && cfg.Layout == "custom";
             var tiles = new List<LayoutPreview.Tile>();
             List<Rectangle> slots = CurrentSlots(Math.Max(order.Count, preview.EditMode ? 0 : (order.Count == 0 && cfg.Layout != "custom" ? 5 : order.Count)));
             for (int i = 0; i < slots.Count; i++)
             {
                 var t = new LayoutPreview.Tile { Px = slots[i] };
-                if (i < order.Count && !raidMode) { t.Hwnd = order[i]; t.Label = known[order[i]].Label; t.IsMain = i == 0; }
-                else if (i < order.Count && raidMode) { t.Hwnd = order[i]; t.Label = known[order[i]].Label; t.IsMain = i == 0; }
+                if (i < order.Count) { t.Hwnd = order[i]; t.Label = known[order[i]].Label; t.IsMain = i < MainCount; }
                 else t.Empty = true;
                 tiles.Add(t);
             }
@@ -1544,7 +1568,7 @@ namespace WowTiler
                 swapTimer.Stop();
                 IntPtr h = pendingSwap; pendingSwap = IntPtr.Zero;
                 if (h == IntPtr.Zero || Native.GetForegroundWindow() != h) return;   // they moved on; ignore
-                if (order.Count > 1 && order[0] != h && order.Contains(h)) MakeMain(h);
+                if (order.Count > 1 && order.IndexOf(h) >= MainCount) MakeMain(h);
             };
         }
 
@@ -1563,7 +1587,7 @@ namespace WowTiler
         void OnForegroundChanged(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
         {
             if (!cfg.SwapOnFocus || raidMode || loading) return;
-            if (hwnd == IntPtr.Zero || !order.Contains(hwnd) || order[0] == hwnd) return;
+            if (hwnd == IntPtr.Zero || !order.Contains(hwnd) || order.IndexOf(hwnd) < MainCount) return;
             if (!SwapModifierHeld()) return;
             if ((DateTime.Now - lastTiled).TotalMilliseconds < 800) return;         // our own re-tile shuffles focus
             pendingSwap = hwnd;
@@ -1770,7 +1794,7 @@ namespace WowTiler
             for (int i = 0; i < rows.Count; i++)
             {
                 WowWindow w = rows[i];
-                bool isMain = !w.Ignored && order.Count > 0 && order[0] == w.Hwnd;
+                bool isMain = !w.Ignored && order.IndexOf(w.Hwnd) >= 0 && order.IndexOf(w.Hwnd) < MainCount;
                 int slotNo = order.IndexOf(w.Hwnd) + 1;
                 int r = i + 1;
                 clientTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1838,6 +1862,7 @@ namespace WowTiler
             cfg.Monitor = Math.Max(0, monitorBox.SelectedIndex);
             cfg.MainPercent = mainSize.Value;
             cfg.Gap = (int)gapBox.Value;
+            cfg.Mains = (int)mainsBox.Value;
             cfg.AutoApply = autoBox.Checked;
             cfg.Borderless = borderBox.Checked;
             cfg.FocusOnSwap = focusBox.Checked;
@@ -1921,7 +1946,7 @@ namespace WowTiler
             }
             int total = n;
             if ((cfg.Layout == "l_left" || cfg.Layout == "l_right") && n >= 2) total = 2 * LShapeN(n - 1, cfg.MainPercent / 100.0);
-            return ComputeRects(total, Area(), cfg.Layout, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen);
+            return ComputeRects(total, Area(), cfg.Layout, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
         }
 
         bool AltsOnOtherMonitor
@@ -2018,7 +2043,7 @@ namespace WowTiler
         // Slot 0 = main. The main starts at `mainFrac` of the screen and grows as long
         // as that costs the alts nothing (they stay the same size until the side
         // region becomes the limiting factor), so screens fill edge to edge.
-        static List<Rectangle> ComputeRects(int n, Rectangle area, string layout, double mainFrac, int gap, double aspect, bool fill)
+        static List<Rectangle> ComputeRects(int n, Rectangle area, string layout, double mainFrac, int gap, double aspect, bool fill, int mains)
         {
             var rects = new List<Rectangle>();
             if (n == 0) return rects;
@@ -2026,6 +2051,29 @@ namespace WowTiler
 
             if (n == 1) { rects.Add(fill ? area : FitCell(area, aspect)); return rects; }
             if (layout == "grid") return PackCells(area, n, fill ? 0 : aspect, gap, 0, 0);
+
+            if (layout == "mains_top" || layout == "mains_left")
+            {
+                // The first `mains` clients share a big region equally; the rest pack into the remaining strip.
+                int m = Math.Max(1, Math.Min(mains, n)), rest = n - m;
+                Rectangle big, small;
+                if (rest == 0) return PackCells(area, m, fill ? 0 : aspect, gap, 0, 0);
+                if (layout == "mains_top")
+                {
+                    int bh = (int)(area.Height * mainFrac);
+                    big = new Rectangle(area.X, area.Y, area.Width, bh - gap / 2);
+                    small = new Rectangle(area.X, area.Y + bh + gap / 2, area.Width, area.Height - bh - gap / 2);
+                }
+                else
+                {
+                    int bw = (int)(area.Width * mainFrac);
+                    big = new Rectangle(area.X, area.Y, bw - gap / 2, area.Height);
+                    small = new Rectangle(area.X + bw + gap / 2, area.Y, area.Width - bw - gap / 2, area.Height);
+                }
+                rects.AddRange(PackCells(big, m, fill ? 0 : aspect, gap, 0, 0));
+                rects.AddRange(PackCells(small, rest, fill ? 0 : aspect, gap, layout == "mains_left" ? -1 : 0, layout == "mains_top" ? -1 : 0));
+                return rects;
+            }
 
             int k = n - 1, cols; bool wl;
             const int step = 4;
@@ -2285,7 +2333,8 @@ namespace WowTiler
             // resolution on activation, which would undo a resize done just before.
             if (focus && cfg.FocusOnSwap)
             {
-                Native.ForceForeground(known[order[0]].Hwnd);
+                IntPtr f = lastPromoted != IntPtr.Zero && order.Contains(lastPromoted) ? lastPromoted : order[0];
+                Native.ForceForeground(f);
                 System.Threading.Thread.Sleep(150);
             }
             var placed = new Dictionary<IntPtr, Rectangle>();
@@ -2296,7 +2345,7 @@ namespace WowTiler
                 if (Native.IsIconic(w.Hwnd) || Native.IsZoomed(w.Hwnd)) Native.ShowWindow(w.Hwnd, Native.SW_RESTORE);
                 if (w.SetBorderless(cfg.Borderless)) Native.CommitFrame(w.Hwnd);
                 Rectangle target = rects[i];
-                bool exactCells = cfg.FillScreen || cfg.Layout == "l_left" || cfg.Layout == "l_right" || cfg.Layout == "custom" || AltsOnOtherMonitor;
+                bool exactCells = cfg.FillScreen || cfg.Layout == "l_left" || cfg.Layout == "l_right" || cfg.Layout == "custom" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || AltsOnOtherMonitor;
                 if (!exactCells)
                 {
                     int frameW, frameH;
@@ -2417,12 +2466,25 @@ namespace WowTiler
             if (cfg.AutoApply && !raidMode && order.Count > 0) ApplyLayout(false);
         }
 
+        int promoteTick = 0;
+        IntPtr lastPromoted = IntPtr.Zero;
+
+        // Promote a client into a main slot. With several mains, it replaces the one that was
+        // promoted longest ago, so repeated promotions rotate through the mains.
         void MakeMain(IntPtr hwnd)
         {
             if (known.ContainsKey(hwnd) && known[hwnd].Ignored) SetIgnored(hwnd, false);
             int i = order.IndexOf(hwnd);
-            if (i <= 0) return;
-            IntPtr tmp = order[0]; order[0] = order[i]; order[i] = tmp;
+            if (i < 0 || i < MainCount) return;
+            int target = 0, oldest = int.MaxValue;
+            for (int s = 0; s < MainCount && s < order.Count; s++)
+            {
+                int tick = known.ContainsKey(order[s]) ? known[order[s]].PromoteTick : 0;
+                if (tick < oldest) { oldest = tick; target = s; }
+            }
+            IntPtr tmp = order[target]; order[target] = order[i]; order[i] = tmp;
+            if (known.ContainsKey(hwnd)) known[hwnd].PromoteTick = ++promoteTick;
+            lastPromoted = hwnd;
             ApplyLayout(true);
         }
 

@@ -1,4 +1,4 @@
-WoW Window Tiler 1.1
+WoW Window Tiler 1.2
 ====================
 
 Tiles your World of Warcraft clients on one monitor (or two), keeps every
@@ -68,12 +68,17 @@ LAYOUTS (Layout tab)
   Main left/right     main fills the height, alts stack beside it.
   Main top/bottom     main fills the width, alts in a strip.
   Even grid           everything the same size.
+  Mains top / left    several big "main" slots sharing the big region (set
+                      how many with "Mains"), alts packed smaller beside them.
+                      Promoting an alt replaces the main promoted longest ago.
 
   Alts on             put the alts on a second monitor; the main then gets
                       its whole monitor and the alts share a grid.
   Keep free           pixels kept empty at the Top / Bottom / Left / Right
                       edge - for a stream overlay, dock, or second taskbar.
   Main size           nudges how big the main is where the layout allows.
+  Mains               number of big slots (Mains layouts and Custom: the
+                      first N slots you draw are the mains).
   Fill the screen     uses every pixel but lets the main go off-ratio.
   Gap                 spacing between windows.
   Borderless          strips the title bars from the clients.
