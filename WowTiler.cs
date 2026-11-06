@@ -1006,6 +1006,7 @@ namespace WowTiler
         Button updateButton;
         CheckBox updateCheckBox;
         bool updating;                           // restarting into a new version: skip the border cleanup
+        Size normalSize;                         // the window's proper size, to undo a collapsed restore
         Button editButton, addSlotButton;
         NumericUpDown reserveTop, reserveBottom, reserveLeft, reserveRight;
 
@@ -1082,7 +1083,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.3";
+        public const string Version = "1.3.1";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -1355,6 +1356,7 @@ namespace WowTiler
             ResumeLayout(false);
             PerformLayout();
             Darken(this);
+            normalSize = Size;
         }
 
         void BuildTray()
@@ -1629,13 +1631,16 @@ namespace WowTiler
                 Log.Write(string.Format("ShowFromTray: visible={0} state={1} handle={2} bounds={3}", Visible, WindowState, IsHandleCreated, Bounds));
                 allowVisible = true;
                 if (!IsHandleCreated) CreateHandle();
-                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-                EnsureOnTilingMonitor();
-                Visible = true;
                 Show();
-                Native.ShowWindow(Handle, Native.SW_RESTORE);
-                Native.ShowWindow(Handle, Native.SW_SHOWNOACTIVATE);
+                // If it was minimized when it went to the tray, Windows still holds the minimized
+                // placement (a 160x28 stub). Un-minimize through Win32 first, then normalize.
+                if (Native.IsIconic(Handle)) { Log.Write("ShowFromTray: window was iconic, restoring"); Native.ShowWindow(Handle, Native.SW_RESTORE); }
                 WindowState = FormWindowState.Normal;
+                if (Width < normalSize.Width - 20 || Height < normalSize.Height - 20)
+                {
+                    Log.Write("ShowFromTray: size collapsed to " + Size + ", resetting to " + normalSize);
+                    Size = normalSize;
+                }
                 Opacity = 1.0;
                 EnsureOnTilingMonitor();
                 ShowFromTrayFront();
@@ -1665,6 +1670,7 @@ namespace WowTiler
         {
             Hide();
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            if (IsHandleCreated && Native.IsIconic(Handle)) { Native.ShowWindow(Handle, Native.SW_RESTORE); Hide(); }
         }
 
         protected override void OnResize(EventArgs e)
