@@ -1082,7 +1082,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.2";
+        public const string Version = "1.3";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -2075,6 +2075,103 @@ namespace WowTiler
         // Slot 0 = main. The main starts at `mainFrac` of the screen and grows as long
         // as that costs the alts nothing (they stay the same size until the side
         // region becomes the limiting factor), so screens fill edge to edge.
+        // Lay out `m` mains and `k` alts, all at `aspect`. Candidates:
+        //   (a) two bands: mains on top (or left), alts flush against them in the rest;
+        //   (b) a mains grid with empty cells, alts packed into the hole.
+        // Every mains grid x alts grid at every main size is tried; the arrangement leaving
+        // the least empty screen wins. Alts are never larger than mains, and never tiny
+        // (at least a third of a main's width and an eighth of the screen).
+        static List<Rectangle> SolveBands(Rectangle area, int m, int k, double aspect, int gap, bool top)
+        {
+            int W = area.Width, H = area.Height;
+            double minAltAbs = W / 8.0;
+            double bestWaste = double.MaxValue;
+            int bestRows = int.MaxValue;
+            List<Rectangle> best = null;
+            const int steps = 160;
+            double samePenalty = 0.08 * W * H;      // "mains" the same size as alts defeats the point; count it as 8% waste
+
+            // (a) bands
+            for (int cm = 1; cm <= m; cm++)
+            {
+                int rm = (m + cm - 1) / cm;
+                double mwMax = Math.Min((W - gap * (cm - 1)) / (double)cm, (H - gap * (rm - 1)) / (double)rm * aspect);
+                if (mwMax <= 0) continue;
+                for (int t = steps; t >= steps / 4; t--)
+                {
+                    double mw = mwMax * t / steps, mh = mw / aspect;
+                    double bandMain = top ? rm * mh + gap * (rm - 1) : cm * mw + gap * (cm - 1);
+                    double restSpan = (top ? H : W) - bandMain - gap;
+                    if (restSpan <= 0) continue;
+                    for (int ca = 1; ca <= k; ca++)
+                    {
+                        int ra = (k + ca - 1) / ca;
+                        double aw;
+                        if (top) aw = Math.Min((W - gap * (ca - 1)) / (double)ca, (restSpan - gap * (ra - 1)) / ra * aspect);
+                        else     aw = Math.Min((restSpan - gap * (ca - 1)) / (double)ca, (H - gap * (ra - 1)) / ra * aspect);
+                        if (aw <= 0 || aw > mw + 0.5 || aw < 0.33 * mw || aw < minAltAbs) continue;
+                        double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
+                        if (aw >= 0.9 * mw) waste += samePenalty;
+                        if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
+                        {
+                            bestWaste = waste; bestRows = ra;
+                            best = BandRects(area, m, k, cm, ca, (int)mw, (int)(mw / aspect), (int)aw, (int)(aw / aspect), gap, top);
+                        }
+                    }
+                }
+            }
+
+            // (b) grid with a hole for the alts
+            for (int cm = 1; cm <= m + 1; cm++)
+            {
+                int rm = (m + cm - 1) / cm;
+                int holes = cm * rm - m;
+                if (holes <= 0) continue;
+                double mw = Math.Min((W - gap * (cm - 1)) / (double)cm, (H - gap * (rm - 1)) / (double)rm * aspect), mh = mw / aspect;
+                double holeW = holes * mw + gap * (holes - 1), holeH = mh;
+                for (int ca = 1; ca <= k; ca++)
+                {
+                    int ra = (k + ca - 1) / ca;
+                    double aw = Math.Min((holeW - gap * (ca - 1)) / ca, (holeH - gap * (ra - 1)) / ra * aspect);
+                    if (aw <= 0 || aw < 0.33 * mw || aw < minAltAbs) continue;
+                    double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
+                    if (aw >= 0.9 * mw) waste += samePenalty;
+                    if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
+                    {
+                        bestWaste = waste; bestRows = ra;
+                        int MW = (int)mw, MH = (int)mh, AW = (int)aw, AH = (int)(aw / aspect);
+                        int gridW = cm * MW + gap * (cm - 1), gridH = rm * MH + gap * (rm - 1);
+                        int gx = area.X + (W - gridW) / 2, gy = area.Y + (H - gridH) / 2;
+                        var r = new List<Rectangle>();
+                        for (int i = 0; i < m; i++) r.Add(new Rectangle(gx + (i % cm) * (MW + gap), gy + (i / cm) * (MH + gap), MW, MH));
+                        int hx = gx + (cm - holes) * (MW + gap), hy = gy + (rm - 1) * (MH + gap);
+                        int altsW = ca * AW + gap * (ca - 1), altsH = ra * AH + gap * (ra - 1);
+                        int ax = hx + ((int)holeW - altsW) / 2, ay = hy;
+                        for (int i = 0; i < k; i++) r.Add(new Rectangle(ax + (i % ca) * (AW + gap), ay + (i / ca) * (AH + gap), AW, AH));
+                        best = r;
+                    }
+                }
+            }
+
+            if (best == null) best = PackCells(area, m + k, aspect, gap, 0, 0);
+            return best;
+        }
+
+        static List<Rectangle> BandRects(Rectangle area, int m, int k, int cm, int ca, int MW, int MH, int AW, int AH, int gap, bool top)
+        {
+            int W = area.Width, H = area.Height;
+            int rm = (m + cm - 1) / cm, ra = (k + ca - 1) / ca;
+            int mainsW = cm * MW + gap * (cm - 1), mainsH = rm * MH + gap * (rm - 1);
+            int altsW = ca * AW + gap * (ca - 1), altsH = ra * AH + gap * (ra - 1);
+            int mx, my, ax, ay;
+            if (top) { mx = area.X + (W - mainsW) / 2; my = area.Y; ax = area.X + (W - altsW) / 2; ay = area.Y + mainsH + gap; }
+            else     { mx = area.X; my = area.Y + (H - mainsH) / 2; ax = area.X + mainsW + gap; ay = area.Y + (H - altsH) / 2; }
+            var rects = new List<Rectangle>();
+            for (int i = 0; i < m; i++) rects.Add(new Rectangle(mx + (i % cm) * (MW + gap), my + (i / cm) * (MH + gap), MW, MH));
+            for (int i = 0; i < k; i++) rects.Add(new Rectangle(ax + (i % ca) * (AW + gap), ay + (i / ca) * (AH + gap), AW, AH));
+            return rects;
+        }
+
         static List<Rectangle> ComputeRects(int n, Rectangle area, string layout, double mainFrac, int gap, double aspect, bool fill, int mains)
         {
             var rects = new List<Rectangle>();
@@ -2086,25 +2183,31 @@ namespace WowTiler
 
             if (layout == "mains_top" || layout == "mains_left")
             {
-                // The first `mains` clients share a big region equally; the rest pack into the remaining strip.
                 int m = Math.Max(1, Math.Min(mains, n)), rest = n - m;
-                Rectangle big, small;
                 if (rest == 0) return PackCells(area, m, fill ? 0 : aspect, gap, 0, 0);
-                if (layout == "mains_top")
+                if (m == 1 && !fill && aspect > 0)
+                    return ComputeRects(n, new Rectangle(area.X - gap, area.Y - gap, area.Width + 2 * gap, area.Height + 2 * gap), "l_left", mainFrac, gap, aspect, fill, 1);
+                if (fill || aspect <= 0)
                 {
-                    int bh = (int)(area.Height * mainFrac);
-                    big = new Rectangle(area.X, area.Y, area.Width, bh - gap / 2);
-                    small = new Rectangle(area.X, area.Y + bh + gap / 2, area.Width, area.Height - bh - gap / 2);
+                    // Free aspect: simple proportional split, both bands filled.
+                    Rectangle big, small;
+                    if (layout == "mains_top")
+                    {
+                        int bh = (int)(area.Height * mainFrac);
+                        big = new Rectangle(area.X, area.Y, area.Width, bh - gap / 2);
+                        small = new Rectangle(area.X, area.Y + bh + gap / 2, area.Width, area.Height - bh - gap / 2);
+                    }
+                    else
+                    {
+                        int bw = (int)(area.Width * mainFrac);
+                        big = new Rectangle(area.X, area.Y, bw - gap / 2, area.Height);
+                        small = new Rectangle(area.X + bw + gap / 2, area.Y, area.Width - bw - gap / 2, area.Height);
+                    }
+                    rects.AddRange(PackCells(big, m, 0, gap, 0, 0));
+                    rects.AddRange(PackCells(small, rest, 0, gap, 0, 0));
+                    return rects;
                 }
-                else
-                {
-                    int bw = (int)(area.Width * mainFrac);
-                    big = new Rectangle(area.X, area.Y, bw - gap / 2, area.Height);
-                    small = new Rectangle(area.X + bw + gap / 2, area.Y, area.Width - bw - gap / 2, area.Height);
-                }
-                rects.AddRange(PackCells(big, m, fill ? 0 : aspect, gap, 0, 0));
-                rects.AddRange(PackCells(small, rest, fill ? 0 : aspect, gap, layout == "mains_left" ? -1 : 0, layout == "mains_top" ? -1 : 0));
-                return rects;
+                return SolveBands(area, m, rest, aspect, gap, layout == "mains_top");
             }
 
             int k = n - 1, cols; bool wl;

@@ -1,4 +1,4 @@
-WoW Window Tiler 1.2
+WoW Window Tiler 1.3
 ====================
 
 Tiles your World of Warcraft clients on one monitor (or two), keeps every
@@ -68,8 +68,10 @@ LAYOUTS (Layout tab)
   Main left/right     main fills the height, alts stack beside it.
   Main top/bottom     main fills the width, alts in a strip.
   Even grid           everything the same size.
-  Mains top / left    several big "main" slots sharing the big region (set
-                      how many with "Mains"), alts packed smaller beside them.
+  Mains top / left    several big "main" slots (set how many with "Mains"),
+                      alts smaller beside them. The split is solved for you:
+                      every arrangement is tried and the one that leaves the
+                      least empty screen wins, all windows staying 16:9.
                       Promoting an alt replaces the main promoted longest ago.
 
   Alts on             put the alts on a second monitor; the main then gets
