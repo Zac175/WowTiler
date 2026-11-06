@@ -1049,6 +1049,7 @@ namespace WowTiler
             BuildUi();
             BuildTray();
             InstallFocusHook();
+            EnsureOnTilingMonitor();
             loading = false;
             if (cfg.CheckUpdates && Updater.Configured)
             {
@@ -1363,7 +1364,7 @@ namespace WowTiler
             tray.Text = "WoW Window Tiler";
             tray.Visible = true;
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Open", null, delegate { ShowFromTray(); });
+            menu.Items.Add("Open", null, delegate { Log.Write("Tray: Open clicked."); BeginInvoke((MethodInvoker)delegate { ShowFromTray(); }); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Apply layout", null, delegate { ApplyLayout(false); });
             menu.Items.Add("Next -> main", null, delegate { Rotate(1); });
@@ -1372,7 +1373,7 @@ namespace WowTiler
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, delegate { reallyClose = true; Close(); });
             tray.ContextMenuStrip = menu;
-            tray.DoubleClick += delegate { ShowFromTray(); };
+            tray.DoubleClick += delegate { Log.Write("Tray: double-click."); BeginInvoke((MethodInvoker)delegate { ShowFromTray(); }); };
         }
 
         // ---------------- preview & custom layout editor ----------------
@@ -1608,12 +1609,43 @@ namespace WowTiler
             base.SetVisibleCore(value);
         }
 
+        // Put the window on the tiling monitor, centered, and fully inside its working area.
+        // (WinForms' CenterScreen means the monitor the MOUSE is on, which may be a dark or
+        // off-to-the-side screen, and that made the tray's Open look like it did nothing.)
+        void EnsureOnTilingMonitor()
+        {
+            Screen s = monitors[Math.Max(0, Math.Min(cfg.Monitor, monitors.Length - 1))];
+            Rectangle wa = s.WorkingArea;
+            int x = wa.X + (wa.Width - Width) / 2, y = wa.Y + (wa.Height - Height) / 2;
+            x = Math.Max(wa.X, Math.Min(x, wa.Right - Width)); y = Math.Max(wa.Y, Math.Min(y, wa.Bottom - Height));
+            StartPosition = FormStartPosition.Manual;
+            Location = new Point(x, y);
+        }
+
         void ShowFromTray()
         {
-            allowVisible = true;
-            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-            Show();
-            WindowState = FormWindowState.Normal;
+            try
+            {
+                Log.Write(string.Format("ShowFromTray: visible={0} state={1} handle={2} bounds={3}", Visible, WindowState, IsHandleCreated, Bounds));
+                allowVisible = true;
+                if (!IsHandleCreated) CreateHandle();
+                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+                EnsureOnTilingMonitor();
+                Visible = true;
+                Show();
+                Native.ShowWindow(Handle, Native.SW_RESTORE);
+                Native.ShowWindow(Handle, Native.SW_SHOWNOACTIVATE);
+                WindowState = FormWindowState.Normal;
+                Opacity = 1.0;
+                EnsureOnTilingMonitor();
+                ShowFromTrayFront();
+                Log.Write(string.Format("ShowFromTray done: visible={0} state={1} bounds={2}", Visible, WindowState, Bounds));
+            }
+            catch (Exception ex) { Log.Write("ShowFromTray failed: " + ex); }
+        }
+
+        void ShowFromTrayFront()
+        {
             // Windows may deny us the foreground (we weren't the last process clicked), which
             // would leave the window behind the full-screen WoW clients. Briefly going topmost
             // puts it in front regardless; then we drop back to the user's setting.
@@ -2568,7 +2600,13 @@ namespace WowTiler
 
         protected override void WndProc(ref Message m)
         {
-            if (m.Msg == (int)Native.WM_SHOWME) { ShowFromTray(); return; }
+            if (m.Msg == (int)Native.WM_SHOWME)
+            {
+                Log.Write("WM_SHOWME received.");
+                try { using (var ack = System.Threading.EventWaitHandle.OpenExisting("Local\\WowTiler.ShowAck")) ack.Set(); } catch (Exception) { }
+                BeginInvoke((MethodInvoker)delegate { ShowFromTray(); });
+                return;
+            }
             if (m.Msg == Native.WM_HOTKEY)
             {
                 int id = (int)(m.WParam.ToInt64() & 0xFFFF);
@@ -2688,11 +2726,33 @@ namespace WowTiler
         }
     }
 
+    static class Log
+    {
+        static readonly object gate = new object();
+        public static string PathName { get { return Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "WowTiler.log"); } }
+        public static void Write(string msg)
+        {
+            try
+            {
+                lock (gate)
+                {
+                    var fi = new FileInfo(PathName);
+                    if (fi.Exists && fi.Length > 512 * 1024) fi.Delete();          // keep it small
+                    File.AppendAllText(PathName, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + msg + Environment.NewLine);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
     static class Program
     {
         [STAThread]
         static void Main()
         {
+            Application.ThreadException += delegate(object s2, System.Threading.ThreadExceptionEventArgs e2) { Log.Write("UI exception: " + e2.Exception); };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s2, UnhandledExceptionEventArgs e2) { Log.Write("Fatal exception: " + e2.ExceptionObject); };
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Native.EnableDpiAwareness();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -2738,8 +2798,24 @@ namespace WowTiler
             {
                 if (!created)
                 {
+                    Log.Write("Second instance started; asking the running copy to show itself.");
                     Native.AllowSetForegroundWindow(Native.ASFW_ANY);
-                    Native.PostMessageW(Native.HWND_BROADCAST, Native.WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
+                    bool acked = false;
+                    try
+                    {
+                        using (var ack = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, "Local\\WowTiler.ShowAck"))
+                        {
+                            Native.PostMessageW(Native.HWND_BROADCAST, Native.WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
+                            acked = ack.WaitOne(2500);
+                        }
+                    }
+                    catch (Exception ex) { Log.Write("Ack wait failed: " + ex.Message); }
+                    if (!acked)
+                    {
+                        Log.Write("Running copy did not respond within 2.5 s.");
+                        MessageBox.Show("WoW Window Tiler is already running but did not respond.\n\nLook for its icon in the system tray (the ^ overflow). If it is stuck, end WowTiler.exe in Task Manager and start it again.\n\nDetails are in WowTiler.log next to the exe.",
+                            "WoW Window Tiler", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
                     return;
                 }
                 Application.Run(new MainForm(minimized));
