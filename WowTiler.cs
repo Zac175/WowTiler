@@ -1110,7 +1110,7 @@ namespace WowTiler
             var header = new Panel { Dock = DockStyle.Top, Height = 54, BackColor = Header };
             var title = new Label { Text = "WoW Window Tiler", ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 13F),
                 AutoSize = true, Location = new Point(16, 9), BackColor = Color.Transparent };
-            var sub = new Label { Text = "Tiles your clients, keeps them 16:9, one key to swap the main.  Works with Retail, Classic and PTR clients.", ForeColor = Color.FromArgb(170, 176, 195),
+            var sub = new Label { Text = "Tiles your clients, keeps them 16:9, one key to swap the main.  Works with Retail, Classic, WoW Forever and PTR clients.", ForeColor = Color.FromArgb(170, 176, 195),
                 AutoSize = true, Location = new Point(17, 32), BackColor = Color.Transparent };
             raidButton = Flat("Raid mode", Accent, Header, delegate { ToggleRaidMode(); });
             raidButton.AutoSize = false; raidButton.Size = new Size(130, 32); raidButton.Margin = new Padding(0);

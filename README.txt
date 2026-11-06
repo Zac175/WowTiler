@@ -8,8 +8,8 @@ or a hotkey. Made because resizing clients by hand got old.
 It only moves and resizes windows. It never sends keys or clicks to the game,
 so it is not multiboxing software - nothing is broadcast or automated.
 
-Works with every current client: Retail, Classic Era, Classic progression
-(Cata/MoP), PTR and Beta builds. Windows 10/11. No install, no admin.
+Works with every current client: Retail, Classic Era, Classic progression,
+(Cata/MoP), WoW Forever, PTR and Beta builds. Windows 10/11. No install, no admin.
 
 FILES
 -----
