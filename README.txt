@@ -1,4 +1,4 @@
-WoW Window Tiler 1.0
+WoW Window Tiler 1.1
 ====================
 
 Tiles your World of Warcraft clients on one monitor (or two), keeps every
