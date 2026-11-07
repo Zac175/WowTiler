@@ -1006,7 +1006,28 @@ namespace WowTiler
         Button updateButton;
         CheckBox updateCheckBox;
         bool updating;                           // restarting into a new version: skip the border cleanup
-        Size normalSize;                         // the window's proper size, to undo a collapsed restore
+        Size normalSize;                         // the window's designed size
+        Rectangle goodBounds = Rectangle.Empty;  // last bounds seen while properly open (not minimized/stub)
+
+        bool LooksCollapsed { get { return Width < 400 || Height < 200 || Left <= -30000 || Top <= -30000; } }
+
+        void RememberGoodBounds()
+        {
+            if (Visible && WindowState == FormWindowState.Normal && !LooksCollapsed) goodBounds = Bounds;
+        }
+
+        protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); RememberGoodBounds(); }
+
+        void RestoreProperBounds(string why)
+        {
+            Log.Write("Restoring window bounds (" + why + "): was " + Bounds + ", good=" + goodBounds + ", design=" + normalSize);
+            if (goodBounds.Width > 400 && goodBounds.Height > 200) Bounds = goodBounds;
+            else
+            {
+                Size = normalSize.Width > 400 ? normalSize : new Size(S(900), S(820));
+                EnsureOnTilingMonitor();
+            }
+        }
         Button editButton, addSlotButton;
         NumericUpDown reserveTop, reserveBottom, reserveLeft, reserveRight;
 
@@ -1086,7 +1107,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.3.2";
+        public const string Version = "1.3.3";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -1646,19 +1667,18 @@ namespace WowTiler
                 Log.Write(string.Format("ShowFromTray: visible={0} state={1} handle={2} bounds={3}", Visible, WindowState, IsHandleCreated, Bounds));
                 allowVisible = true;
                 if (!IsHandleCreated) CreateHandle();
+                // If it went to the tray by being minimized, Windows may still hold the minimized
+                // placement (an off-screen 199x34 stub) even though WinForms says "Normal".
+                // Never trust the flag: fix the bounds before and after showing.
+                if (LooksCollapsed) RestoreProperBounds("before show");
                 Show();
-                // If it was minimized when it went to the tray, Windows still holds the minimized
-                // placement (a 160x28 stub). Un-minimize through Win32 first, then normalize.
                 if (Native.IsIconic(Handle)) { Log.Write("ShowFromTray: window was iconic, restoring"); Native.ShowWindow(Handle, Native.SW_RESTORE); }
                 WindowState = FormWindowState.Normal;
-                if (Width < normalSize.Width - 20 || Height < normalSize.Height - 20)
-                {
-                    Log.Write("ShowFromTray: size collapsed to " + Size + ", resetting to " + normalSize);
-                    Size = normalSize;
-                }
+                if (LooksCollapsed) RestoreProperBounds("after show");
                 Opacity = 1.0;
-                EnsureOnTilingMonitor();
+                if (goodBounds.IsEmpty) EnsureOnTilingMonitor();
                 ShowFromTrayFront();
+                RememberGoodBounds();
                 Log.Write(string.Format("ShowFromTray done: visible={0} state={1} bounds={2}", Visible, WindowState, Bounds));
             }
             catch (Exception ex) { Log.Write("ShowFromTray failed: " + ex); }
@@ -1691,6 +1711,7 @@ namespace WowTiler
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
+            RememberGoodBounds();
             if (WindowState == FormWindowState.Minimized && Visible) BeginInvoke((MethodInvoker)delegate { HideToTray(); });
         }
 
@@ -2900,27 +2921,6 @@ namespace WowTiler
                 try { Process.GetProcessById(waitForPid).WaitForExit(15000); } catch (Exception) { }
             }
 
-            // Self-update: if WowTiler.new.exe sits next to us, swap it in and relaunch.
-            try
-            {
-                string exe = Application.ExecutablePath;
-                string dir = Path.GetDirectoryName(exe);
-                string fresh = Path.Combine(dir, "WowTiler.new.exe");
-                if (File.Exists(fresh) && !exe.EndsWith(".new.exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Can't overwrite a running exe; rename ourselves aside, move the new one in, relaunch.
-                    string old = Path.Combine(dir, "WowTiler.old.exe");
-                    if (File.Exists(old)) File.Delete(old);
-                    File.Move(exe, old);
-                    File.Move(fresh, exe);
-                    Process.Start(exe, minimized ? "--minimized" : "");
-                    return;
-                }
-                string stale = Path.Combine(dir, "WowTiler.old.exe");
-                if (File.Exists(stale)) { try { File.Delete(stale); } catch (Exception) { } }
-            }
-            catch (Exception) { }
-
             // One copy at a time: launching the exe again just brings the running one up.
             bool created;
             using (var mutex = new System.Threading.Mutex(true, "Local\\WowTiler.SingleInstance", out created))
@@ -2947,6 +2947,33 @@ namespace WowTiler
                     }
                     return;
                 }
+
+                // Self-update: if WowTiler.new.exe sits next to us, swap it in and relaunch.
+                // (Only when we are the sole copy; otherwise the old process would keep running.)
+                try
+                {
+                    string exe = Application.ExecutablePath;
+                    string dir = Path.GetDirectoryName(exe);
+                    string fresh = Path.Combine(dir, "WowTiler.new.exe");
+                    if (File.Exists(fresh) && !exe.EndsWith(".new.exe", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string old = Path.Combine(dir, "WowTiler.old.exe");
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Move(exe, old);
+                        File.Move(fresh, exe);
+                        Log.Write("Swapped in WowTiler.new.exe; relaunching.");
+                        Process.Start(exe, "--wait-for " + Process.GetCurrentProcess().Id + (minimized ? " --minimized" : ""));
+                        return;
+                    }
+                    string stale = Path.Combine(dir, "WowTiler.old.exe");
+                    if (File.Exists(stale)) { try { File.Delete(stale); } catch (Exception) { } }
+                }
+                catch (Exception ex) { Log.Write("Self-update failed: " + ex.Message); }
+
+                Log.Write("Started version " + MainForm.Version + (minimized ? " (minimized)" : ""));
+                Native.EnableDpiAwareness();
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new MainForm(minimized));
             }
         }
