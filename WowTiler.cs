@@ -1057,6 +1057,9 @@ namespace WowTiler
                 var t = new Timer { Interval = 6000 };
                 t.Tick += delegate { t.Stop(); t.Dispose(); CheckForUpdates(false); };
                 t.Start();
+                var periodic = new Timer { Interval = 6 * 60 * 60 * 1000 };
+                periodic.Tick += delegate { if (cfg.CheckUpdates && pendingUpdate == null) CheckForUpdates(false); };
+                periodic.Start();
             }
             TopMost = cfg.AlwaysOnTop;
 
@@ -1083,7 +1086,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.3.1";
+        public const string Version = "1.3.2";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -1478,6 +1481,7 @@ namespace WowTiler
         // ---------------- updates ----------------
 
         Updater.Info pendingUpdate;
+        bool offeringUpdate;
 
         // manual = the user clicked the button, so always say something; otherwise stay quiet unless there's an update.
         void CheckForUpdates(bool manual)
@@ -1507,12 +1511,14 @@ namespace WowTiler
                 }
                 pendingUpdate = info;
                 SetStatus("Version " + info.Latest + " is available.");
-                if (manual || Visible) OfferUpdate(info);
-                else
+                if (raidMode && !manual)
                 {
-                    tray.BalloonTipClicked += OnUpdateBalloonClicked;
-                    tray.ShowBalloonTip(8000, "WoW Window Tiler " + info.Latest + " available", "Click here to update.", ToolTipIcon.Info);
+                    // Don't interrupt a raid; the prompt comes up when raid mode ends.
+                    tray.ShowBalloonTip(8000, "WoW Window Tiler " + info.Latest + " available", "You'll be asked to update when you leave raid mode.", ToolTipIcon.Info);
+                    return;
                 }
+                if (!Visible) ShowFromTray();
+                OfferUpdate(info);
             };
             worker.RunWorkerAsync();
         }
@@ -1525,10 +1531,19 @@ namespace WowTiler
 
         void OfferUpdate(Updater.Info info)
         {
-            var r = MessageBox.Show(this,
-                "Version " + info.Latest + " is available (you have " + Version + ").\n\nDownload and restart into it now?\nYour settings and layout are kept.",
-                "Update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (r != DialogResult.Yes) return;
+            if (offeringUpdate) return;
+            offeringUpdate = true;
+            bool wasTop = TopMost;
+            TopMost = true;
+            DialogResult r;
+            try
+            {
+                r = MessageBox.Show(this,
+                    "Version " + info.Latest + " is available (you have " + Version + ").\n\nDownload and restart into it now?\nYour settings and layout are kept.",
+                    "WoW Window Tiler update", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+            }
+            finally { TopMost = wasTop || cfg.AlwaysOnTop; offeringUpdate = false; }
+            if (r != DialogResult.Yes) { pendingUpdate = null; SetStatus("Update to " + info.Latest + " skipped. Use 'Check for updates' on the Behavior tab any time."); return; }
             updateButton.Enabled = false;
             SetStatus("Downloading version " + info.Latest + "...");
             var worker = new System.ComponentModel.BackgroundWorker();
@@ -2563,6 +2578,11 @@ namespace WowTiler
         {
             raidMode = false;
             raidButton.Text = "Raid mode";
+            if (pendingUpdate != null && pendingUpdate.Latest > Updater.Current)
+            {
+                var info = pendingUpdate;
+                BeginInvoke((MethodInvoker)delegate { if (!Visible) ShowFromTray(); OfferUpdate(info); });
+            }
             if (raidMain != IntPtr.Zero && known.ContainsKey(raidMain) && Native.IsWindow(raidMain))
             {
                 WowWindow w = known[raidMain];
