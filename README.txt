@@ -1,8 +1,8 @@
-WoW Window Tiler 1.3.3
+WoW Window Tiler 1.4
 ====================
 
-Tiles your World of Warcraft clients on one monitor (or two), keeps every
-window 16:9, and swaps any client into the big "main" slot with a Shift+click
+Tiles your World of Warcraft clients on one monitor (or two) - 16:9, ultrawide
+or super-ultrawide - keeps every window 16:9, and swaps any client into the big "main" slot with a Shift+click
 or a hotkey. Made because resizing clients by hand got old.
 
 It only moves and resizes windows. It never sends keys or clicks to the game,
@@ -62,6 +62,10 @@ option on the Behavior tab. Nothing re-tiles while raid mode is on.
 
 LAYOUTS (Layout tab)
 --------------------
+  Auto (default)      works out the best arrangement for YOUR monitor - 16:9,
+                      21:9 ultrawide, 32:9 super-ultrawide - by trying every
+                      candidate and keeping the one with the least empty screen.
+                      The status bar shows which arrangement it picked.
   L-shape (default)   main + alts all exactly 16:9; alts fill the side column
                       top to bottom, then along the bottom. With 4 alts on a
                       16:9 monitor: main 2/3 of the width, alts 1/3.

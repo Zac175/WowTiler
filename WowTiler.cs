@@ -411,7 +411,7 @@ namespace WowTiler
     {
         public static readonly string FilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WowTiler.ini");
 
-        public string Layout = "main_left";     // main_left | main_right | main_top | main_bottom | grid
+        public string Layout = "auto";          // auto | l_left | l_right | mains_top | mains_left | main_* | grid | custom
         public string Aspect = "16:9";          // 16:9 | 16:10 | 21:9 | 4:3 | free
         public int Monitor = 0;
         public int MainPercent = 70;
@@ -963,8 +963,9 @@ namespace WowTiler
     // -------------------------------------------------------------------------
     class MainForm : Form
     {
-        static readonly string[] LayoutKeys = { "l_left", "l_right", "mains_top", "mains_left", "main_left", "main_right", "main_top", "main_bottom", "grid", "custom" };
+        static readonly string[] LayoutKeys = { "auto", "l_left", "l_right", "mains_top", "mains_left", "main_left", "main_right", "main_top", "main_bottom", "grid", "custom" };
         static readonly string[] LayoutNames = {
+            "Auto - best fit for this monitor (16:9, 21:9, 32:9...)",
             "L-shape, main top-left (all 16:9)",
             "L-shape, main top-right (all 16:9)",
             "Mains across the top, alts along the bottom",
@@ -981,7 +982,7 @@ namespace WowTiler
         {
             get
             {
-                bool multi = cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || cfg.Layout == "custom";
+                bool multi = cfg.Layout == "auto" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || cfg.Layout == "custom";
                 return multi ? Math.Max(1, Math.Min(cfg.Mains, Math.Max(1, order.Count))) : 1;
             }
         }
@@ -1107,7 +1108,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.3.3";
+        public const string Version = "1.4";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -2018,9 +2019,11 @@ namespace WowTiler
                 l.AddRange(PackCells(new Rectangle(altArea.X + cfg.Gap, altArea.Y + cfg.Gap, altArea.Width - 2 * cfg.Gap, altArea.Height - 2 * cfg.Gap), n - 1, aspect, cfg.Gap, 0, 0));
                 return l;
             }
+            string layout = cfg.Layout;
+            if (layout == "auto") layout = ResolveAuto(n, Area(), cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
             int total = n;
-            if ((cfg.Layout == "l_left" || cfg.Layout == "l_right") && n >= 2) total = 2 * LShapeN(n - 1, cfg.MainPercent / 100.0);
-            return ComputeRects(total, Area(), cfg.Layout, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
+            if ((layout == "l_left" || layout == "l_right") && n >= 2) total = 2 * LShapeN(n - 1, cfg.MainPercent / 100.0);
+            return ComputeRects(total, Area(), layout, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
         }
 
         bool AltsOnOtherMonitor
@@ -2126,7 +2129,7 @@ namespace WowTiler
         static List<Rectangle> SolveBands(Rectangle area, int m, int k, double aspect, int gap, bool top)
         {
             int W = area.Width, H = area.Height;
-            double minAltAbs = W / 8.0;
+            double minAltAbs = Math.Min(W, H * 16.0 / 9.0) / 8.0;   // relative to a 16:9 "view", so ultrawides don't inflate it
             double bestWaste = double.MaxValue;
             int bestRows = int.MaxValue;
             List<Rectangle> best = null;
@@ -2151,7 +2154,7 @@ namespace WowTiler
                         double aw;
                         if (top) aw = Math.Min((W - gap * (ca - 1)) / (double)ca, (restSpan - gap * (ra - 1)) / ra * aspect);
                         else     aw = Math.Min((restSpan - gap * (ca - 1)) / (double)ca, (H - gap * (ra - 1)) / ra * aspect);
-                        if (aw <= 0 || aw > mw + 0.5 || aw < 0.33 * mw || aw < minAltAbs) continue;
+                        if (aw <= 0 || aw > mw + 0.5 || aw < 0.2 * mw || aw < minAltAbs) continue;
                         double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
                         if (aw >= 0.9 * mw) waste += samePenalty;
                         if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
@@ -2175,7 +2178,7 @@ namespace WowTiler
                 {
                     int ra = (k + ca - 1) / ca;
                     double aw = Math.Min((holeW - gap * (ca - 1)) / ca, (holeH - gap * (ra - 1)) / ra * aspect);
-                    if (aw <= 0 || aw < 0.33 * mw || aw < minAltAbs) continue;
+                    if (aw <= 0 || aw < 0.2 * mw || aw < minAltAbs) continue;
                     double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
                     if (aw >= 0.9 * mw) waste += samePenalty;
                     if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
@@ -2214,8 +2217,29 @@ namespace WowTiler
             return rects;
         }
 
+        // "auto": try the concrete layouts that make sense for this client count and pick the one
+        // that leaves the least empty screen on THIS monitor (16:9, 21:9, 32:9, portrait...).
+        static string ResolveAuto(int n, Rectangle area, double mainFrac, int gap, double aspect, bool fill, int mains)
+        {
+            if (n <= 1) return "l_left";
+            if (fill || aspect <= 0) return mains > 1 ? "mains_left" : "main_left";
+            string[] candidates = mains > 1 ? new[] { "mains_top", "mains_left" }
+                                            : new[] { "l_left", "main_left", "main_top", "mains_left", "mains_top" };
+            string best = candidates[0]; double bestUsed = -1;
+            foreach (string key in candidates)
+            {
+                List<Rectangle> r = ComputeRects(n, area, key, mainFrac, gap, aspect, fill, mains);
+                double used = 0;
+                for (int i = 0; i < Math.Min(n, r.Count); i++) used += (double)r[i].Width * r[i].Height;
+                if (r.Count < n) used = -1;                       // layout couldn't place everyone
+                if (used > bestUsed + 1) { bestUsed = used; best = key; }
+            }
+            return best;
+        }
+
         static List<Rectangle> ComputeRects(int n, Rectangle area, string layout, double mainFrac, int gap, double aspect, bool fill, int mains)
         {
+            if (layout == "auto") layout = ResolveAuto(n, area, mainFrac, gap, aspect, fill, mains);
             var rects = new List<Rectangle>();
             if (n == 0) return rects;
             area = new Rectangle(area.X + gap, area.Y + gap, area.Width - 2 * gap, area.Height - 2 * gap);
@@ -2227,7 +2251,8 @@ namespace WowTiler
             {
                 int m = Math.Max(1, Math.Min(mains, n)), rest = n - m;
                 if (rest == 0) return PackCells(area, m, fill ? 0 : aspect, gap, 0, 0);
-                if (m == 1 && !fill && aspect > 0)
+                double screenRatio = area.Height > 0 ? area.Width / (double)area.Height : 1.78;
+                if (m == 1 && !fill && aspect > 0 && screenRatio < 1.9)
                     return ComputeRects(n, new Rectangle(area.X - gap, area.Y - gap, area.Width + 2 * gap, area.Height + 2 * gap), "l_left", mainFrac, gap, aspect, fill, 1);
                 if (fill || aspect <= 0)
                 {
@@ -2274,9 +2299,11 @@ namespace WowTiler
                 }
                 int mainW = (nn - 1) * tileW + gap * (nn - 2);
                 int mainH = (nn - 1) * tileH + gap * (nn - 2);
+                int blockW = nn * tileW + gap * (nn - 1);
+                int offX = Math.Max(0, (area.Width - blockW) / 2);          // wider-than-16:9 screens: center the block
                 bool mainLeft = layout == "l_left";
-                int mainX = mainLeft ? area.X : area.X + tileW + gap;
-                int colX = mainLeft ? area.X + mainW + gap : area.X;
+                int mainX = mainLeft ? area.X + offX : area.X + offX + tileW + gap;
+                int colX = mainLeft ? area.X + offX + mainW + gap : area.X + offX;
                 rects.Add(new Rectangle(mainX, area.Y, mainW, mainH));
 
                 // Slot order: down the whole side column (corner included), then along the
@@ -2522,7 +2549,7 @@ namespace WowTiler
                 if (Native.IsIconic(w.Hwnd) || Native.IsZoomed(w.Hwnd)) Native.ShowWindow(w.Hwnd, Native.SW_RESTORE);
                 if (w.SetBorderless(cfg.Borderless)) Native.CommitFrame(w.Hwnd);
                 Rectangle target = rects[i];
-                bool exactCells = cfg.FillScreen || cfg.Layout == "l_left" || cfg.Layout == "l_right" || cfg.Layout == "custom" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || AltsOnOtherMonitor;
+                bool exactCells = cfg.FillScreen || cfg.Layout == "auto" || cfg.Layout == "l_left" || cfg.Layout == "l_right" || cfg.Layout == "custom" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || AltsOnOtherMonitor;
                 if (!exactCells)
                 {
                     int frameW, frameH;
@@ -2547,6 +2574,7 @@ namespace WowTiler
             WowWindow main = known[order[0]];
             lastTiled = DateTime.Now;
             Rectangle scr = Area();
+            string autoNote = cfg.Layout == "auto" ? "  [auto: " + ResolveAuto(order.Count, scr, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains).Replace("_", " ") + "]" : "";
             int fsCount = 0;
             foreach (IntPtr h in order) if (known[h].NeedsFix) fsCount++;
             if (fsCount > 0)
@@ -2554,8 +2582,8 @@ namespace WowTiler
             else if (Native.AccessDenied)
                 SetStatus("Windows is blocking messages to WoW (WoW runs as administrator). Run WowTiler as administrator too.");
             else
-                SetStatus(string.Format("Tiled {0} client(s).  Main: {1} at {2}x{3} ({4}% of screen width)",
-                    order.Count, main.Label, rects[0].Width, rects[0].Height, (int)Math.Round(100.0 * rects[0].Width / scr.Width)));
+                SetStatus(string.Format("Tiled {0} client(s).  Main: {1} at {2}x{3} ({4}% of screen width){5}",
+                    order.Count, main.Label, rects[0].Width, rects[0].Height, (int)Math.Round(100.0 * rects[0].Width / scr.Width), autoNote));
             UpdatePreview();
             RebuildClientList();
         }
