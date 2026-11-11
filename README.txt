@@ -1,14 +1,15 @@
-WoW Window Tiler 1.4
+WoW Window Tiler 1.5
 ====================
 
 Tiles your World of Warcraft clients on one monitor (or two) - 16:9, ultrawide
-or super-ultrawide - keeps every window 16:9, and swaps any client into the big "main" slot with a Shift+click
-or a hotkey. Made because resizing clients by hand got old.
+or super-ultrawide - keeps every window 16:9, and swaps any client into the
+big "main" slot with a Shift+click or a hotkey. Made because resizing clients
+by hand got old.
 
 It only moves and resizes windows. It never sends keys or clicks to the game,
 so it is not multiboxing software - nothing is broadcast or automated.
 
-Works with every current client: Retail, Classic Era, Classic progression,
+Works with every current client: Retail, Classic Era, Classic progression
 (Cata/MoP), WoW Forever, PTR and Beta builds. Windows 10/11. No install, no admin.
 
 FILES
@@ -60,40 +61,51 @@ Makes the current main full-monitor and borderless: looks like Windowed
 layout back. Alts stay behind the main, or get minimized if you tick that
 option on the Behavior tab. Nothing re-tiles while raid mode is on.
 
-LAYOUTS (Layout tab)
---------------------
-  Auto (default)      works out the best arrangement for YOUR monitor - 16:9,
-                      21:9 ultrawide, 32:9 super-ultrawide - by trying every
-                      candidate and keeping the one with the least empty screen.
-                      The status bar shows which arrangement it picked.
-  L-shape (default)   main + alts all exactly 16:9; alts fill the side column
-                      top to bottom, then along the bottom. With 4 alts on a
-                      16:9 monitor: main 2/3 of the width, alts 1/3.
-  Main left/right     main fills the height, alts stack beside it.
-  Main top/bottom     main fills the width, alts in a strip.
-  Even grid           everything the same size.
-  Mains top / left    several big "main" slots (set how many with "Mains"),
-                      alts smaller beside them. The split is solved for you:
-                      every arrangement is tried and the one that leaves the
-                      least empty screen wins, all windows staying 16:9.
-                      Promoting an alt replaces the main promoted longest ago.
+LAYOUT (Layout tab)
+-------------------
+The layout is worked out for you. For your monitor - 16:9, 21:9 ultrawide or
+32:9 super-ultrawide - and however many clients are open, the tiler tries
+every arrangement and keeps the one that leaves the least empty screen, with
+every window at the chosen aspect. You only say what you want:
 
+  Main goes           where the big window sits:
+                        Automatic   whichever side wastes the least screen
+                        Left        alts on the right
+                        Right       alts on the left
+                        Top         alts below
+                        Bottom      alts above
+  Mains               how many big windows (1-4). Promoting an alt replaces
+                      the main promoted longest ago.
+  Alt size            Balanced                  good main, alts still usable
+                      Small alts, biggest main  the main gets all it can
+                      Large alts                alts at least half the main
+  Aspect              16:9 by default; other ratios, or free (stretch to fill).
+
+The preview shows the result, and the status bar names the arrangement that
+was picked. Drag a client onto another in the preview to swap them;
+double-click one to make it the main.
+
+  Customize layout    under the preview. Drag and resize the slots yourself,
+                      add or delete slots; the first N slots are the mains.
+                      Click "Done editing" when you are happy.
+  Back to automatic   drops the custom layout and lets the tiler work it out
+                      again.
+
+  Monitor             which monitor to tile on.
   Alts on             put the alts on a second monitor; the main then gets
                       its whole monitor and the alts share a grid.
-  Keep free           pixels kept empty at the Top / Bottom / Left / Right
+  Keep free           pixels kept empty at the top / bottom / left / right
                       edge - for a stream overlay, dock, or second taskbar.
-  Main size           nudges how big the main is where the layout allows.
-  Mains               number of big slots (Mains layouts and Custom: the
-                      first N slots you draw are the mains).
-  Fill the screen     uses every pixel but lets the main go off-ratio.
   Gap                 spacing between windows.
+  Cover the taskbar   tile over the taskbar as well.
   Borderless          strips the title bars from the clients.
 
 BEHAVIOR TAB
 ------------
   Auto-tile, focus-on-swap, keep-on-top, raid-minimizes-alts, click-swap on/off,
   Start with Windows (shortcut in your Startup folder; starts in the tray),
-  Start minimized to the tray, resize method (leave on the default).
+  Start minimized to the tray, resize method (leave on the default),
+  Check for updates.
 
 TRAY
 ----
@@ -103,8 +115,10 @@ to open the window.
 
 UPDATING
 --------
-Drop a new build next to the exe as "WowTiler.new.exe". The next time the
-tiler starts it swaps the new one in by itself.
+The tiler checks GitHub for a newer version when it starts (and every few
+hours) and asks before installing it. "Check for updates" on the Behavior tab
+does it on demand. By hand: drop a new build next to the exe as
+"WowTiler.new.exe" and it is swapped in the next time the tiler starts.
 
 REBUILDING
 ----------

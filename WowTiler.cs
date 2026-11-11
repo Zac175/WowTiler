@@ -411,14 +411,15 @@ namespace WowTiler
     {
         public static readonly string FilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WowTiler.ini");
 
-        public string Layout = "auto";          // auto | l_left | l_right | mains_top | mains_left | main_* | grid | custom
+        public string Layout = "auto";          // auto (solved for you) | custom (slots drawn in the preview)
+        public string MainSide = "auto";        // where the main(s) go: auto | left | right | top | bottom
+        public string AltPref = "balanced";     // alt size preference: balanced | small | large
         public string Aspect = "16:9";          // 16:9 | 16:10 | 21:9 | 4:3 | free
         public int Monitor = 0;
-        public int MainPercent = 70;
-        public int Mains = 1;                   // how many big slots (used by the "Mains ..." layouts and Custom)
+        public int Mains = 1;                   // how many big slots
         public int Gap = 0;
         public bool CoverTaskbar = false;
-        public bool FillScreen = true;          // main absorbs leftover space so nothing is empty
+        bool sideRead;                          // main_side was present in the file (so don't derive it from an old layout name)
         public int ResizeMethod = 0;            // see Native.Place
         public bool RaidMinimizeAlts = false;   // raid mode: minimize alts instead of leaving them behind the main
         public bool StartMinimized = false;     // start hidden in the tray (used by the Windows-startup shortcut)
@@ -464,14 +465,14 @@ namespace WowTiler
                     int n; bool b;
                     switch (key)
                     {
-                        case "layout": c.Layout = val; break;
+                        case "layout": c.Layout = val.ToLowerInvariant(); break;
+                        case "main_side": c.MainSide = val.ToLowerInvariant(); c.sideRead = true; break;
+                        case "alt_pref": c.AltPref = val.ToLowerInvariant(); break;
                         case "aspect": c.Aspect = val; break;
                         case "monitor": if (int.TryParse(val, out n)) c.Monitor = n; break;
-                        case "main_percent": if (int.TryParse(val, out n)) c.MainPercent = Math.Max(40, Math.Min(90, n)); break;
                         case "mains": if (int.TryParse(val, out n)) c.Mains = Math.Max(1, Math.Min(4, n)); break;
                         case "gap": if (int.TryParse(val, out n)) c.Gap = Math.Max(0, Math.Min(60, n)); break;
                         case "cover_taskbar": if (bool.TryParse(val, out b)) c.CoverTaskbar = b; break;
-                        case "fill_screen": if (bool.TryParse(val, out b)) c.FillScreen = b; break;
                         case "raid_minimize_alts": if (bool.TryParse(val, out b)) c.RaidMinimizeAlts = b; break;
                         case "start_minimized": if (bool.TryParse(val, out b)) c.StartMinimized = b; break;
                         case "swap_on_focus": if (bool.TryParse(val, out b)) c.SwapOnFocus = b; break;
@@ -509,7 +510,27 @@ namespace WowTiler
                 }
             }
             catch (Exception) { }
+            c.Normalize();
             return c;
+        }
+
+        // Settings files from before 1.5 named a specific layout. Everything except "custom" is
+        // now the automatic layout; an old right/top/bottom choice carries over as the main position.
+        void Normalize()
+        {
+            if (Layout != "custom")
+            {
+                if (!sideRead)
+                {
+                    if (Layout == "l_right" || Layout == "main_right") MainSide = "right";
+                    else if (Layout == "main_top" || Layout == "mains_top") MainSide = "top";
+                    else if (Layout == "main_bottom") MainSide = "bottom";
+                    else MainSide = "auto";
+                }
+                Layout = "auto";
+            }
+            if (Array.IndexOf(new[] { "auto", "left", "right", "top", "bottom" }, MainSide) < 0) MainSide = "auto";
+            if (Array.IndexOf(new[] { "balanced", "small", "large" }, AltPref) < 0) AltPref = "balanced";
         }
 
         public void Save()
@@ -519,13 +540,13 @@ namespace WowTiler
                 var sb = new StringBuilder();
                 sb.AppendLine("# WoW Window Tiler settings. Hotkeys look like ctrl+alt+right, ctrl+shift+f5, alt+numpad1.");
                 sb.AppendLine("layout=" + Layout);
+                sb.AppendLine("main_side=" + MainSide);
+                sb.AppendLine("alt_pref=" + AltPref);
                 sb.AppendLine("aspect=" + Aspect);
                 sb.AppendLine("monitor=" + Monitor);
-                sb.AppendLine("main_percent=" + MainPercent);
                 sb.AppendLine("mains=" + Mains);
                 sb.AppendLine("gap=" + Gap);
                 sb.AppendLine("cover_taskbar=" + CoverTaskbar);
-                sb.AppendLine("fill_screen=" + FillScreen);
                 sb.AppendLine("resize_method=" + ResizeMethod);
                 sb.AppendLine("raid_minimize_alts=" + RaidMinimizeAlts);
                 sb.AppendLine("start_minimized=" + StartMinimized);
@@ -963,31 +984,26 @@ namespace WowTiler
     // -------------------------------------------------------------------------
     class MainForm : Form
     {
-        static readonly string[] LayoutKeys = { "auto", "l_left", "l_right", "mains_top", "mains_left", "main_left", "main_right", "main_top", "main_bottom", "grid", "custom" };
-        static readonly string[] LayoutNames = {
-            "Auto - best fit for this monitor (16:9, 21:9, 32:9...)",
-            "L-shape, main top-left (all 16:9)",
-            "L-shape, main top-right (all 16:9)",
-            "Mains across the top, alts along the bottom",
-            "Mains on the left, alts stacked right",
-            "Main left, alts stacked right",
-            "Main right, alts stacked left",
-            "Main top, alts along bottom",
-            "Main bottom, alts along top",
-            "Even grid",
-            "Custom (draw your own in the preview)" };
+        static readonly string[] SideKeys = { "auto", "left", "right", "top", "bottom" };
+        static readonly string[] SideNames = {
+            "Automatic (least empty space)",
+            "Left  (alts on the right)",
+            "Right  (alts on the left)",
+            "Top  (alts below)",
+            "Bottom  (alts above)" };
+        static readonly string[] AltPrefKeys = { "balanced", "small", "large" };
+        static readonly string[] AltPrefNames = {
+            "Balanced (recommended)",
+            "Small alts, biggest main",
+            "Large alts (at least half the main)" };
 
         // How many of the leading slots count as "mains" (big, gold, promotion targets).
         int MainCount
         {
-            get
-            {
-                bool multi = cfg.Layout == "auto" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || cfg.Layout == "custom";
-                return multi ? Math.Max(1, Math.Min(cfg.Mains, Math.Max(1, order.Count))) : 1;
-            }
+            get { return Math.Max(1, Math.Min(cfg.Mains, Math.Max(1, order.Count))); }
         }
         static readonly string[] AspectKeys = { "16:9", "16:10", "21:9", "4:3", "free" };
-        static readonly string[] AspectNames = { "16:9 (widescreen)", "16:10", "21:9 (ultrawide)", "4:3", "Free (fill the slot)" };
+        static readonly string[] AspectNames = { "16:9 (widescreen)", "16:10", "21:9 (ultrawide)", "4:3", "Free (stretch to fill the screen)" };
 
         Config cfg;
         Screen[] monitors;
@@ -1055,11 +1071,11 @@ namespace WowTiler
         bool startHidden;
         bool reallyClose;
 
-        ComboBox layoutBox, aspectBox, monitorBox, methodBox;
-        TrackBar mainSize;
-        Label mainSizeLabel;
+        ComboBox sideBox, altPrefBox, aspectBox, monitorBox, methodBox;
+        Button autoButton;
+        string autoChoice = "";                  // what the automatic layout picked last time (for the status bar)
         NumericUpDown gapBox, mainsBox;
-        CheckBox autoBox, borderBox, focusBox, topBox, taskbarBox, fillBox, raidMinBox;
+        CheckBox autoBox, borderBox, focusBox, topBox, taskbarBox, raidMinBox;
         TableLayoutPanel clientTable;
         Label statusLabel;
         Timer pollTimer;
@@ -1108,7 +1124,7 @@ namespace WowTiler
 
         // ---------------- UI ----------------
 
-        public const string Version = "1.4";
+        public const string Version = "1.5";
         static readonly Color Accent = Color.FromArgb(235, 185, 60);     // gold (main slot)
         static readonly Color AccentDark = Color.FromArgb(150, 110, 25);
         static readonly Color Bg = Color.FromArgb(24, 26, 34);           // window background
@@ -1195,8 +1211,18 @@ namespace WowTiler
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             int row = 0;
 
-            layoutBox = Combo(LayoutNames, Math.Max(0, Array.IndexOf(LayoutKeys, cfg.Layout)));
-            AddRow(grid, ref row, "Layout", layoutBox);
+            sideBox = Combo(SideNames, Math.Max(0, Array.IndexOf(SideKeys, cfg.MainSide)));
+            AddRow(grid, ref row, "Main goes", sideBox);
+
+            var mainsRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
+            mainsBox = new NumericUpDown { Minimum = 1, Maximum = 4, Width = 56, Value = Math.Max(1, Math.Min(4, cfg.Mains)) };
+            mainsBox.ValueChanged += delegate { SettingChanged(); };
+            mainsRow.Controls.Add(mainsBox);
+            mainsRow.Controls.Add(new Label { Text = "big windows", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 5, 0, 0) });
+            AddRow(grid, ref row, "Mains", mainsRow);
+
+            altPrefBox = Combo(AltPrefNames, Math.Max(0, Array.IndexOf(AltPrefKeys, cfg.AltPref)));
+            AddRow(grid, ref row, "Alt size", altPrefBox);
 
             aspectBox = Combo(AspectNames, Math.Max(0, Array.IndexOf(AspectKeys, cfg.Aspect)));
             AddRow(grid, ref row, "Aspect", aspectBox);
@@ -1212,17 +1238,6 @@ namespace WowTiler
             altMonitorBox = Combo(altNames.ToArray(), cfg.AltMonitor < 0 ? 0 : Math.Min(cfg.AltMonitor + 1, monitors.Length));
             AddRow(grid, ref row, "Alts on", altMonitorBox);
 
-            var sizeRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill, Margin = new Padding(0) };
-            sizeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            sizeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
-            mainSize = new TrackBar { Minimum = 40, Maximum = 90, TickFrequency = 10, Value = cfg.MainPercent, AutoSize = false, Height = 28, Dock = DockStyle.Fill, Margin = new Padding(0) };
-            mainSizeLabel = new Label { Text = cfg.MainPercent + "%", AutoSize = false, Width = 42, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, ForeColor = Muted };
-            mainSize.ValueChanged += delegate { mainSizeLabel.Text = mainSize.Value + "%"; };
-            mainSize.MouseUp += delegate { SettingChanged(); };
-            mainSize.KeyUp += delegate { SettingChanged(); };
-            sizeRow.Controls.Add(mainSize, 0, 0); sizeRow.Controls.Add(mainSizeLabel, 1, 0);
-            AddRow(grid, ref row, "Main size", sizeRow);
-
             var gapRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
             gapBox = new NumericUpDown { Minimum = 0, Maximum = 60, Width = 56, Value = cfg.Gap };
             gapBox.ValueChanged += delegate { SettingChanged(); };
@@ -1230,30 +1245,25 @@ namespace WowTiler
             gapRow.Controls.Add(new Label { Text = "px between windows", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 5, 0, 0) });
             AddRow(grid, ref row, "Gap", gapRow);
 
-            var mainsRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
-            mainsBox = new NumericUpDown { Minimum = 1, Maximum = 4, Width = 56, Value = Math.Max(1, Math.Min(4, cfg.Mains)) };
-            mainsBox.ValueChanged += delegate { SettingChanged(); };
-            mainsRow.Controls.Add(mainsBox);
-            mainsRow.Controls.Add(new Label { Text = "big slots (for the 'Mains ...' and Custom layouts)", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 5, 0, 0) });
-            AddRow(grid, ref row, "Mains", mainsRow);
-
-            var reserve = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
+            // Two short rows (top/bottom, left/right) so all four boxes fit the column.
             reserveTop = ReserveBox(cfg.ReserveTop); reserveBottom = ReserveBox(cfg.ReserveBottom);
             reserveLeft = ReserveBox(cfg.ReserveLeft); reserveRight = ReserveBox(cfg.ReserveRight);
-            reserve.Controls.Add(Tiny("T")); reserve.Controls.Add(reserveTop);
-            reserve.Controls.Add(Tiny("B")); reserve.Controls.Add(reserveBottom);
-            reserve.Controls.Add(Tiny("L")); reserve.Controls.Add(reserveLeft);
-            reserve.Controls.Add(Tiny("R")); reserve.Controls.Add(reserveRight);
+            var reserve = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0), ColumnCount = 4, RowCount = 2 };
+            for (int ci = 0; ci < 4; ci++) reserve.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            reserve.Controls.Add(Tiny("top"), 0, 0); reserve.Controls.Add(reserveTop, 1, 0);
+            reserve.Controls.Add(Tiny("bottom"), 2, 0); reserve.Controls.Add(reserveBottom, 3, 0);
+            reserve.Controls.Add(Tiny("left"), 0, 1); reserve.Controls.Add(reserveLeft, 1, 1);
+            reserve.Controls.Add(Tiny("right"), 2, 1); reserve.Controls.Add(reserveRight, 3, 1);
             new ToolTip().SetToolTip(reserve, "Pixels to keep free at each screen edge (for a stream overlay, dock, second taskbar...).");
             AddRow(grid, ref row, "Keep free", reserve);
 
-            fillBox = Check("Fill the screen (main absorbs leftover space)", cfg.FillScreen);
             taskbarBox = Check("Cover the taskbar", cfg.CoverTaskbar);
             borderBox = Check("Borderless clients (no title bars)", cfg.Borderless);
             var layoutChecks = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 8, 0, 0), WrapContents = false };
-            layoutChecks.Controls.Add(fillBox); layoutChecks.Controls.Add(taskbarBox); layoutChecks.Controls.Add(borderBox);
+            layoutChecks.Controls.Add(taskbarBox); layoutChecks.Controls.Add(borderBox);
 
-            var layoutHelp = Note("L-shape keeps every window exactly 16:9 (main + alts). Fill-the-screen uses every pixel but lets the main go off-ratio.");
+            var layoutHelp = Note("The layout is worked out for you: least empty space on your monitor, every window at the chosen aspect. Say where the main goes and the rest follows. Want full control? Click 'Customize layout' under the preview and drag the slots.");
+            layoutHelp.Height = 76;
             tabLayout.Controls.Add(layoutHelp); tabLayout.Controls.Add(layoutChecks); tabLayout.Controls.Add(grid);
             layoutHelp.Dock = DockStyle.Bottom;
 
@@ -1261,7 +1271,7 @@ namespace WowTiler
             autoBox = Check("Auto-tile when clients open or close", cfg.AutoApply);
             focusBox = Check("Focus the client swapped to main", cfg.FocusOnSwap);
             topBox = Check("Keep this window on top", cfg.AlwaysOnTop);
-            raidMinBox = Check("Raid mode minimizes alts (otherwise they stay behind)", cfg.RaidMinimizeAlts);
+            raidMinBox = Check("Raid mode minimizes the alts", cfg.RaidMinimizeAlts);
             startupBox = Check("Start with Windows", Startup.IsEnabled);
             startMinBox = Check("Start minimized to the tray", cfg.StartMinimized);
             swapFocusBox = Check("Shift+click into an alt to make it the main", cfg.SwapOnFocus);
@@ -1373,7 +1383,9 @@ namespace WowTiler
             editButton = Flat("Customize layout", Field, Fg, delegate { ToggleEdit(); });
             addSlotButton = Flat("+ Add slot", Field, Fg, delegate { AddCustomSlot(); });
             addSlotButton.Visible = false;
-            editRow.Controls.Add(editButton); editRow.Controls.Add(addSlotButton);
+            autoButton = Flat("Back to automatic", Field, Fg, delegate { BackToAutomatic(); });
+            editRow.Controls.Add(editButton); editRow.Controls.Add(addSlotButton); editRow.Controls.Add(autoButton);
+            SetEditUi(false);
 
             card.Controls.Add(clientTable); card.Controls.Add(editRow); card.Controls.Add(previewHint); card.Controls.Add(preview); card.Controls.Add(tools); card.Controls.Add(clientHeader);
 
@@ -1445,24 +1457,46 @@ namespace WowTiler
                     cfg.CustomSlots.Clear();
                     foreach (Rectangle r in seed) cfg.CustomSlots.Add(ToFrac(r, c));
                     cfg.Layout = "custom";
-                    loading = true; layoutBox.SelectedIndex = Array.IndexOf(LayoutKeys, "custom"); loading = false;
                     cfg.Save();
                 }
                 preview.EditMode = true;
-                editButton.Text = "Done editing";
-                addSlotButton.Visible = true;
-                previewHintLabel.Text = "Drag a slot to move it, drag its gold corner to resize (16:9 kept). Right-click a slot to delete it. Snaps to edges.";
+                SetEditUi(true);
                 SetStatus("Editing the custom layout. Clients follow as you drag.");
             }
             else
             {
                 preview.EditMode = false;
-                editButton.Text = "Customize layout";
-                addSlotButton.Visible = false;
-                previewHintLabel.Text = "Drag a client onto another to swap. Double-click = make main.";
+                SetEditUi(false);
                 cfg.Save();
                 if (cfg.AutoApply && !raidMode && order.Count > 0) ApplyLayout(false);
             }
+            UpdatePreview();
+        }
+
+        // Buttons, hint text and which Layout-tab controls apply, for the current mode:
+        // automatic, custom, or custom-while-editing.
+        void SetEditUi(bool editing)
+        {
+            bool custom = cfg.Layout == "custom";
+            editButton.Text = editing ? "Done editing" : custom ? "Edit custom layout" : "Customize layout";
+            addSlotButton.Visible = editing;
+            autoButton.Visible = custom;
+            previewHintLabel.Text = editing
+                ? "Drag a slot to move it, drag its gold corner to resize (aspect kept). Right-click a slot to delete it. Snaps to edges."
+                : custom ? "Custom layout. Drag a client onto another to swap; double-click = make main."
+                         : "Automatic layout. Drag a client onto another to swap; double-click = make main.";
+            if (sideBox != null) sideBox.Enabled = !custom;        // the solver's options don't apply to hand-drawn slots
+            if (altPrefBox != null) altPrefBox.Enabled = !custom;
+        }
+
+        void BackToAutomatic()
+        {
+            preview.EditMode = false;
+            cfg.Layout = "auto";
+            cfg.Save();
+            SetEditUi(false);
+            SetStatus("Back to the automatic layout.");
+            if (cfg.AutoApply && !raidMode && order.Count > 0) ApplyLayout(false);
             UpdatePreview();
         }
 
@@ -1742,7 +1776,7 @@ namespace WowTiler
             using (var b = new SolidBrush(sel ? Field : Field)) e.Graphics.FillRectangle(b, e.Bounds);
             if (sel) using (var b = new SolidBrush(Color.FromArgb(60, 66, 86))) e.Graphics.FillRectangle(b, e.Bounds);
             if (e.Index >= 0)
-                TextRenderer.DrawText(e.Graphics, cb.Items[e.Index].ToString(), cb.Font, new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height), Fg, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                TextRenderer.DrawText(e.Graphics, cb.Items[e.Index].ToString(), cb.Font, new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height), cb.Enabled ? Fg : Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
         }
 
 
@@ -1932,10 +1966,10 @@ namespace WowTiler
         void SettingChanged()
         {
             if (loading) return;
-            cfg.Layout = LayoutKeys[Math.Max(0, layoutBox.SelectedIndex)];
+            cfg.MainSide = SideKeys[Math.Max(0, sideBox.SelectedIndex)];
+            cfg.AltPref = AltPrefKeys[Math.Max(0, altPrefBox.SelectedIndex)];
             cfg.Aspect = AspectKeys[Math.Max(0, aspectBox.SelectedIndex)];
             cfg.Monitor = Math.Max(0, monitorBox.SelectedIndex);
-            cfg.MainPercent = mainSize.Value;
             cfg.Gap = (int)gapBox.Value;
             cfg.Mains = (int)mainsBox.Value;
             cfg.AutoApply = autoBox.Checked;
@@ -1943,7 +1977,6 @@ namespace WowTiler
             cfg.FocusOnSwap = focusBox.Checked;
             cfg.AlwaysOnTop = topBox.Checked;
             cfg.CoverTaskbar = taskbarBox.Checked;
-            cfg.FillScreen = fillBox.Checked;
             cfg.ResizeMethod = Math.Max(0, methodBox.SelectedIndex);
             cfg.RaidMinimizeAlts = raidMinBox.Checked;
             cfg.StartMinimized = startMinBox.Checked;
@@ -1990,13 +2023,6 @@ namespace WowTiler
             return l;
         }
 
-        static int LShapeN(int k, double mainFrac)
-        {
-            int nMin = (k + 2) / 2;
-            int nn = Math.Max(nMin, (int)Math.Round(1.0 / Math.Max(0.05, 1.0 - mainFrac)));
-            return Math.Max(2, nn);
-        }
-
         // Every slot of the current layout (including empty ones) for n clients.
         List<Rectangle> CurrentSlots(int n)
         {
@@ -2008,22 +2034,26 @@ namespace WowTiler
                 foreach (RectangleF f in cfg.CustomSlots)
                     l.Add(new Rectangle(c.X + (int)Math.Round(f.X * c.Width), c.Y + (int)Math.Round(f.Y * c.Height),
                                         Math.Max(100, (int)Math.Round(f.Width * c.Width)), Math.Max(60, (int)Math.Round(f.Height * c.Height))));
+                autoChoice = "custom layout";
                 return l;
             }
             if (n <= 0) return new List<Rectangle>();
             if (AltsOnOtherMonitor)
             {
+                // Mains get their whole monitor; alts share a grid on the other one.
+                int g = cfg.Gap, m = Math.Max(1, Math.Min(cfg.Mains, n));
                 Rectangle mainArea = Area(), altArea = MonitorArea(cfg.AltMonitor);
-                var l = new List<Rectangle>();
-                l.Add(cfg.FillScreen ? mainArea : FitCell(mainArea, aspect));
-                l.AddRange(PackCells(new Rectangle(altArea.X + cfg.Gap, altArea.Y + cfg.Gap, altArea.Width - 2 * cfg.Gap, altArea.Height - 2 * cfg.Gap), n - 1, aspect, cfg.Gap, 0, 0));
+                mainArea = new Rectangle(mainArea.X + g, mainArea.Y + g, mainArea.Width - 2 * g, mainArea.Height - 2 * g);
+                altArea = new Rectangle(altArea.X + g, altArea.Y + g, altArea.Width - 2 * g, altArea.Height - 2 * g);
+                var l = aspect > 0 ? PackCells(mainArea, m, aspect, g, 0, 0) : PackFree(mainArea, m, g);
+                l.AddRange(aspect > 0 ? PackCells(altArea, n - m, aspect, g, 0, 0) : PackFree(altArea, n - m, g));
+                autoChoice = "alts on monitor " + (cfg.AltMonitor + 1);
                 return l;
             }
-            string layout = cfg.Layout;
-            if (layout == "auto") layout = ResolveAuto(n, Area(), cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
-            int total = n;
-            if ((layout == "l_left" || layout == "l_right") && n >= 2) total = 2 * LShapeN(n - 1, cfg.MainPercent / 100.0);
-            return ComputeRects(total, Area(), layout, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains);
+            string choice;
+            List<Rectangle> slots = AutoLayout(n, Area(), cfg.Mains, aspect, cfg.Gap, cfg.MainSide, cfg.AltPref, out choice);
+            autoChoice = choice;
+            return slots;
         }
 
         bool AltsOnOtherMonitor
@@ -2117,16 +2147,14 @@ namespace WowTiler
             return rects;
         }
 
-        // Slot 0 = main. The main starts at `mainFrac` of the screen and grows as long
-        // as that costs the alts nothing (they stay the same size until the side
-        // region becomes the limiting factor), so screens fill edge to edge.
         // Lay out `m` mains and `k` alts, all at `aspect`. Candidates:
         //   (a) two bands: mains on top (or left), alts flush against them in the rest;
         //   (b) a mains grid with empty cells, alts packed into the hole.
         // Every mains grid x alts grid at every main size is tried; the arrangement leaving
-        // the least empty screen wins. Alts are never larger than mains, and never tiny
-        // (at least a third of a main's width and an eighth of the screen).
-        static List<Rectangle> SolveBands(Rectangle area, int m, int k, double aspect, int gap, bool top)
+        // the least empty screen wins. Alts are never larger than mains and never smaller than
+        // `minRatio` of a main's width; `lambda` adds a cost for alts under half a main, which
+        // is how "balanced" trades a little empty space for bigger alts.
+        static List<Rectangle> SolveBands(Rectangle area, int m, int k, double aspect, int gap, bool top, double minRatio, double lambda)
         {
             int W = area.Width, H = area.Height;
             double minAltAbs = Math.Min(W, H * 16.0 / 9.0) / 8.0;   // relative to a 16:9 "view", so ultrawides don't inflate it
@@ -2134,7 +2162,6 @@ namespace WowTiler
             int bestRows = int.MaxValue;
             List<Rectangle> best = null;
             const int steps = 160;
-            double samePenalty = 0.08 * W * H;      // "mains" the same size as alts defeats the point; count it as 8% waste
 
             // (a) bands
             for (int cm = 1; cm <= m; cm++)
@@ -2154,9 +2181,9 @@ namespace WowTiler
                         double aw;
                         if (top) aw = Math.Min((W - gap * (ca - 1)) / (double)ca, (restSpan - gap * (ra - 1)) / ra * aspect);
                         else     aw = Math.Min((restSpan - gap * (ca - 1)) / (double)ca, (H - gap * (ra - 1)) / ra * aspect);
-                        if (aw <= 0 || aw > mw + 0.5 || aw < 0.2 * mw || aw < minAltAbs) continue;
+                        if (aw <= 0 || aw > mw + 0.5 || aw < minRatio * mw - 0.5 || aw < minAltAbs) continue;
                         double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
-                        if (aw >= 0.9 * mw) waste += samePenalty;
+                        waste += ProportionCost(aw / mw, m, (double)W * H, lambda);
                         if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
                         {
                             bestWaste = waste; bestRows = ra;
@@ -2178,9 +2205,9 @@ namespace WowTiler
                 {
                     int ra = (k + ca - 1) / ca;
                     double aw = Math.Min((holeW - gap * (ca - 1)) / ca, (holeH - gap * (ra - 1)) / ra * aspect);
-                    if (aw <= 0 || aw < 0.2 * mw || aw < minAltAbs) continue;
+                    if (aw <= 0 || aw > mw + 0.5 || aw < minRatio * mw - 0.5 || aw < minAltAbs) continue;
                     double waste = (double)W * H - m * mw * mh - k * aw * (aw / aspect);
-                    if (aw >= 0.9 * mw) waste += samePenalty;
+                    waste += ProportionCost(aw / mw, m, (double)W * H, lambda);
                     if (waste < bestWaste - 0.5 || (Math.Abs(waste - bestWaste) <= 0.5 && ra < bestRows))
                     {
                         bestWaste = waste; bestRows = ra;
@@ -2217,273 +2244,168 @@ namespace WowTiler
             return rects;
         }
 
-        // "auto": try the concrete layouts that make sense for this client count and pick the one
-        // that leaves the least empty screen on THIS monitor (16:9, 21:9, 32:9, portrait...).
-        static string ResolveAuto(int n, Rectangle area, double mainFrac, int gap, double aspect, bool fill, int mains)
+        // The classic L: one big tile in the top-left corner, small tiles of the same aspect
+        // down the right side and along the bottom. With nn tiles per side the main spans
+        // nn-1 of them. Returns the main plus every small slot (2nn-1 of them) in fill order:
+        // down the side column, then along the bottom row starting beside the column.
+        static List<Rectangle> LShape(Rectangle area, int k, double aspect, int gap)
         {
-            if (n <= 1) return "l_left";
-            if (fill || aspect <= 0) return mains > 1 ? "mains_left" : "main_left";
-            string[] candidates = mains > 1 ? new[] { "mains_top", "mains_left" }
-                                            : new[] { "l_left", "main_left", "main_top", "mains_left", "mains_top" };
-            string best = candidates[0]; double bestUsed = -1;
-            foreach (string key in candidates)
+            var rects = new List<Rectangle>();
+            int nn = Math.Max(3, (k + 2) / 2);
+            int tileH = (area.Height - gap * (nn - 1)) / nn;
+            int tileW = (int)Math.Round(tileH * aspect);
+            if (nn * tileW + gap * (nn - 1) > area.Width)
             {
-                List<Rectangle> r = ComputeRects(n, area, key, mainFrac, gap, aspect, fill, mains);
-                double used = 0;
-                for (int i = 0; i < Math.Min(n, r.Count); i++) used += (double)r[i].Width * r[i].Height;
-                if (r.Count < n) used = -1;                       // layout couldn't place everyone
-                if (used > bestUsed + 1) { bestUsed = used; best = key; }
+                tileW = (area.Width - gap * (nn - 1)) / nn;
+                tileH = (int)Math.Round(tileW / aspect);
             }
-            return best;
+            if (tileW <= 0 || tileH <= 0) return rects;
+            int mainW = (nn - 1) * tileW + gap * (nn - 2), mainH = (nn - 1) * tileH + gap * (nn - 2);
+            int blockW = nn * tileW + gap * (nn - 1);
+            int mainX = area.X + Math.Max(0, (area.Width - blockW) / 2);      // wider-than-needed screens: center the block
+            int colX = mainX + mainW + gap;
+            rects.Add(new Rectangle(mainX, area.Y, mainW, mainH));
+            for (int i = 0; i < nn; i++) rects.Add(new Rectangle(colX, area.Y + i * (tileH + gap), tileW, tileH));
+            for (int i = nn - 2; i >= 0; i--) rects.Add(new Rectangle(mainX + i * (tileW + gap), area.Y + mainH + gap, tileW, tileH));
+            return rects;
         }
 
-        static List<Rectangle> ComputeRects(int n, Rectangle area, string layout, double mainFrac, int gap, double aspect, bool fill, int mains)
+        // Aspect-free grid: fill `region` completely with k cells, choosing the column count
+        // that keeps the cells closest to 16:9.
+        static List<Rectangle> PackFree(Rectangle region, int k, int gap)
         {
-            if (layout == "auto") layout = ResolveAuto(n, area, mainFrac, gap, aspect, fill, mains);
             var rects = new List<Rectangle>();
-            if (n == 0) return rects;
-            area = new Rectangle(area.X + gap, area.Y + gap, area.Width - 2 * gap, area.Height - 2 * gap);
-
-            if (n == 1) { rects.Add(fill ? area : FitCell(area, aspect)); return rects; }
-            if (layout == "grid") return PackCells(area, n, fill ? 0 : aspect, gap, 0, 0);
-
-            if (layout == "mains_top" || layout == "mains_left")
+            if (k <= 0 || region.Width <= 0 || region.Height <= 0) return rects;
+            int cols = 1; double bestDiff = double.MaxValue;
+            for (int c = 1; c <= k; c++)
             {
-                int m = Math.Max(1, Math.Min(mains, n)), rest = n - m;
-                if (rest == 0) return PackCells(area, m, fill ? 0 : aspect, gap, 0, 0);
-                double screenRatio = area.Height > 0 ? area.Width / (double)area.Height : 1.78;
-                if (m == 1 && !fill && aspect > 0 && screenRatio < 1.9)
-                    return ComputeRects(n, new Rectangle(area.X - gap, area.Y - gap, area.Width + 2 * gap, area.Height + 2 * gap), "l_left", mainFrac, gap, aspect, fill, 1);
-                if (fill || aspect <= 0)
-                {
-                    // Free aspect: simple proportional split, both bands filled.
-                    Rectangle big, small;
-                    if (layout == "mains_top")
-                    {
-                        int bh = (int)(area.Height * mainFrac);
-                        big = new Rectangle(area.X, area.Y, area.Width, bh - gap / 2);
-                        small = new Rectangle(area.X, area.Y + bh + gap / 2, area.Width, area.Height - bh - gap / 2);
-                    }
-                    else
-                    {
-                        int bw = (int)(area.Width * mainFrac);
-                        big = new Rectangle(area.X, area.Y, bw - gap / 2, area.Height);
-                        small = new Rectangle(area.X + bw + gap / 2, area.Y, area.Width - bw - gap / 2, area.Height);
-                    }
-                    rects.AddRange(PackCells(big, m, 0, gap, 0, 0));
-                    rects.AddRange(PackCells(small, rest, 0, gap, 0, 0));
-                    return rects;
-                }
-                return SolveBands(area, m, rest, aspect, gap, layout == "mains_top");
+                int r = (k + c - 1) / c;
+                double cw = (region.Width - gap * (c - 1)) / (double)c, ch = (region.Height - gap * (r - 1)) / (double)r;
+                if (cw <= 0 || ch <= 0) continue;
+                double diff = Math.Abs(Math.Log((cw / ch) / (16.0 / 9.0))) + (c * r - k) * 0.5;   // empty cells cost too
+                if (diff < bestDiff) { bestDiff = diff; cols = c; }
             }
-
-            int k = n - 1, cols; bool wl;
-            const int step = 4;
-
-            if (layout == "l_left" || layout == "l_right")
-            {
-                // Tile the screen with one big tile and small tiles of the SAME aspect.
-                // With n small tiles down the side, the main is (n-1)/n of the width and
-                // there are 2n-1 small slots (a column of n and a row of n-1 under the main).
-                // The slider chooses n; n is raised as needed so every alt gets a slot.
-                double a = aspect > 0 ? aspect : area.Width / (double)area.Height;
-                int nMin = (k + 2) / 2;                                           // ceil((k+1)/2)
-                int nn = Math.Max(nMin, (int)Math.Round(1.0 / Math.Max(0.05, 1.0 - mainFrac)));
-                nn = Math.Max(2, nn);
-                int tileH = (area.Height - gap * (nn - 1)) / nn;
-                int tileW = (int)Math.Round(tileH * a);
-                if (nn * tileW + gap * (nn - 1) > area.Width)
-                {
-                    tileW = (area.Width - gap * (nn - 1)) / nn;
-                    tileH = (int)Math.Round(tileW / a);
-                }
-                int mainW = (nn - 1) * tileW + gap * (nn - 2);
-                int mainH = (nn - 1) * tileH + gap * (nn - 2);
-                int blockW = nn * tileW + gap * (nn - 1);
-                int offX = Math.Max(0, (area.Width - blockW) / 2);          // wider-than-16:9 screens: center the block
-                bool mainLeft = layout == "l_left";
-                int mainX = mainLeft ? area.X + offX : area.X + offX + tileW + gap;
-                int colX = mainLeft ? area.X + offX + mainW + gap : area.X + offX;
-                rects.Add(new Rectangle(mainX, area.Y, mainW, mainH));
-
-                // Slot order: down the whole side column (corner included), then along the
-                // bottom row starting beside the column and moving away from it.
-                var slots = new List<Rectangle>();
-                for (int i = 0; i < nn; i++)
-                    slots.Add(new Rectangle(colX, area.Y + i * (tileH + gap), tileW, tileH));
-                int rowY = area.Y + mainH + gap;
-                for (int i = 0; i < nn - 1; i++)
-                {
-                    int j = mainLeft ? nn - 2 - i : i;     // main-left: column is on the right, so walk right-to-left
-                    slots.Add(new Rectangle(mainX + j * (tileW + gap), rowY, tileW, tileH));
-                }
-                for (int i = 0; i < k && i < slots.Count; i++) rects.Add(slots[i]);
-                return rects;
-            }
-
-            if (layout == "main_left" || layout == "main_right")
-            {
-                int mw = Math.Max(1, (int)(area.Width * mainFrac));
-                if (fill)
-                {
-                    // Gap-free arrangements: c columns of aspect-correct alts filling the full
-                    // height; the main takes everything left. The slider picks the arrangement
-                    // whose main share is closest to it (with 4 alts on a 16:9 screen there is
-                    // only one such arrangement, so the slider has nothing to choose).
-                    int bestC = 0, bestCellH = 0, bestCellW = 0, bestColW = 0; double bestScore = double.MaxValue;
-                    if (aspect > 0)
-                        for (int c = 1; c <= k; c++)
-                        {
-                            int r = (k + c - 1) / c;
-                            int cellH = (area.Height - gap * (r - 1)) / r;
-                            int cellW = (int)Math.Round(cellH * aspect);
-                            int colW = c * cellW + gap * (c - 1);
-                            int mainWc = area.Width - colW - gap;
-                            if (mainWc < area.Width * 0.25) continue;
-                            double score = Math.Abs(mainWc / (double)area.Width - mainFrac);
-                            if (score < bestScore) { bestScore = score; bestC = c; bestCellH = cellH; bestCellW = cellW; bestColW = colW; }
-                        }
-                    int colWidth = bestC > 0 ? bestColW : area.Width - mw - gap;
-                    int mainW = area.Width - colWidth - gap;
-                    Rectangle fMain, fSide; int fAnchor;
-                    if (layout == "main_left")
-                    {
-                        fMain = new Rectangle(area.X, area.Y, mainW, area.Height);
-                        fSide = new Rectangle(area.X + mainW + gap, area.Y, colWidth, area.Height);
-                        fAnchor = -1;
-                    }
-                    else
-                    {
-                        fSide = new Rectangle(area.X, area.Y, colWidth, area.Height);
-                        fMain = new Rectangle(area.X + colWidth + gap, area.Y, mainW, area.Height);
-                        fAnchor = 1;
-                    }
-                    rects.Add(fMain);
-                    if (bestC > 0)
-                    {
-                        int rowsF = (k + bestC - 1) / bestC;
-                        int ox = fAnchor < 0 ? fSide.X : fSide.Right - bestColW;
-                        for (int i = 0; i < k; i++)
-                            rects.Add(new Rectangle(ox + (i % bestC) * (bestCellW + gap), fSide.Y + (i / bestC) * (bestCellH + gap), bestCellW, bestCellH));
-                    }
-                    else if (aspect > 0) rects.AddRange(PackCells(fSide, k, aspect, gap, fAnchor, -1));
-                    else
-                    {
-                        int cellH = (area.Height - gap * (k - 1)) / k;
-                        for (int i = 0; i < k; i++) rects.Add(new Rectangle(fSide.X, fSide.Y + i * (cellH + gap), colWidth, cellH));
-                    }
-                    return rects;
-                }
-                if (aspect > 0)
-                {
-                    double altAtSlider = BestCellWidth(area.Width - mw - gap, area.Height, k, aspect, gap, out cols, out wl);
-                    while (mw + step < area.Width - gap)
-                    {
-                        if (mw / aspect >= area.Height) break;                       // main already full height
-                        double alt = BestCellWidth(area.Width - (mw + step) - gap, area.Height, k, aspect, gap, out cols, out wl);
-                        if (alt < altAtSlider - 0.5) break;                           // alts would start shrinking
-                        mw += step;
-                    }
-                    mw = Math.Min(mw, (int)Math.Round(area.Height * aspect));        // never wider than full-height needs
-                }
-                int sw = area.Width - mw - gap;
-                Rectangle mainCell, side;
-                int anchorX;
-                if (layout == "main_left")
-                {
-                    mainCell = new Rectangle(area.X, area.Y, mw, area.Height);
-                    side = new Rectangle(area.X + mw + gap, area.Y, sw, area.Height);
-                    anchorX = -1;   // alts hug the main
-                }
-                else
-                {
-                    side = new Rectangle(area.X, area.Y, sw, area.Height);
-                    mainCell = new Rectangle(area.X + sw + gap, area.Y, mw, area.Height);
-                    anchorX = 1;
-                }
-                rects.Add(FitCell(mainCell, aspect));
-                rects.AddRange(PackCells(side, k, aspect, gap, anchorX, 0));
-            }
-            else // main_top (alts along bottom) / main_bottom (alts along top)
-            {
-                int mh = Math.Max(1, (int)(area.Height * mainFrac));
-                if (fill)
-                {
-                    int bestR = 0, bestCellH = 0, bestCellW = 0, bestStripH = 0; double bestScore = double.MaxValue;
-                    if (aspect > 0)
-                        for (int r = 1; r <= k; r++)
-                        {
-                            int c = (k + r - 1) / r;
-                            int cellW = (area.Width - gap * (c - 1)) / c;
-                            int cellH = (int)Math.Round(cellW / aspect);
-                            int stripH = r * cellH + gap * (r - 1);
-                            int mainHc = area.Height - stripH - gap;
-                            if (mainHc < area.Height * 0.25) continue;
-                            double score = Math.Abs(mainHc / (double)area.Height - mainFrac);
-                            if (score < bestScore) { bestScore = score; bestR = r; bestCellH = cellH; bestCellW = cellW; bestStripH = stripH; }
-                        }
-                    int stripHeight = bestR > 0 ? bestStripH : area.Height - mh - gap;
-                    int mainH = area.Height - stripHeight - gap;
-                    Rectangle fMain, fStrip; int fAnchor;
-                    if (layout == "main_top")
-                    {
-                        fMain = new Rectangle(area.X, area.Y, area.Width, mainH);
-                        fStrip = new Rectangle(area.X, area.Y + mainH + gap, area.Width, stripHeight);
-                        fAnchor = -1;
-                    }
-                    else
-                    {
-                        fStrip = new Rectangle(area.X, area.Y, area.Width, stripHeight);
-                        fMain = new Rectangle(area.X, area.Y + stripHeight + gap, area.Width, mainH);
-                        fAnchor = 1;
-                    }
-                    rects.Add(fMain);
-                    if (bestR > 0)
-                    {
-                        int colsF = (k + bestR - 1) / bestR;
-                        int oy = fAnchor < 0 ? fStrip.Y : fStrip.Bottom - bestStripH;
-                        for (int i = 0; i < k; i++)
-                            rects.Add(new Rectangle(fStrip.X + (i % colsF) * (bestCellW + gap), oy + (i / colsF) * (bestCellH + gap), bestCellW, bestCellH));
-                    }
-                    else if (aspect > 0) rects.AddRange(PackCells(fStrip, k, aspect, gap, 0, fAnchor));
-                    else
-                    {
-                        int cellW = (area.Width - gap * (k - 1)) / k;
-                        for (int i = 0; i < k; i++) rects.Add(new Rectangle(fStrip.X + i * (cellW + gap), fStrip.Y, cellW, stripHeight));
-                    }
-                    return rects;
-                }
-                if (aspect > 0)
-                {
-                    double altAtSlider = BestCellWidth(area.Width, area.Height - mh - gap, k, aspect, gap, out cols, out wl);
-                    while (mh + step < area.Height - gap)
-                    {
-                        if (mh * aspect >= area.Width) break;                        // main already full width
-                        double alt = BestCellWidth(area.Width, area.Height - (mh + step) - gap, k, aspect, gap, out cols, out wl);
-                        if (alt < altAtSlider - 0.5) break;
-                        mh += step;
-                    }
-                    mh = Math.Min(mh, (int)Math.Round(area.Width / aspect));
-                }
-                int sh = area.Height - mh - gap;
-                Rectangle mainCell, strip;
-                int anchorY;
-                if (layout == "main_top")
-                {
-                    mainCell = new Rectangle(area.X, area.Y, area.Width, mh);
-                    strip = new Rectangle(area.X, area.Y + mh + gap, area.Width, sh);
-                    anchorY = -1;
-                }
-                else
-                {
-                    strip = new Rectangle(area.X, area.Y, area.Width, sh);
-                    mainCell = new Rectangle(area.X, area.Y + sh + gap, area.Width, mh);
-                    anchorY = 1;
-                }
-                rects.Add(FitCell(mainCell, aspect));
-                rects.AddRange(PackCells(strip, k, aspect, gap, 0, anchorY));
-            }
+            int rows = (k + cols - 1) / cols;
+            int w = (region.Width - gap * (cols - 1)) / cols, h = (region.Height - gap * (rows - 1)) / rows;
+            for (int i = 0; i < k; i++) rects.Add(new Rectangle(region.X + (i % cols) * (w + gap), region.Y + (i / cols) * (h + gap), w, h));
             return rects;
+        }
+
+        static void MirrorX(List<Rectangle> r, Rectangle area)
+        {
+            for (int i = 0; i < r.Count; i++) r[i] = new Rectangle(area.Left + area.Right - r[i].Right, r[i].Y, r[i].Width, r[i].Height);
+        }
+
+        static void MirrorY(List<Rectangle> r, Rectangle area)
+        {
+            for (int i = 0; i < r.Count; i++) r[i] = new Rectangle(r[i].X, area.Top + area.Bottom - r[i].Bottom, r[i].Width, r[i].Height);
+        }
+
+        // Empty screen left by the first n rects, plus the same preferences the band solver uses,
+        // so L-shape and band candidates can be compared on one scale. Lower is better.
+        static double LayoutScore(List<Rectangle> r, int m, int n, Rectangle area, double minRatio, double lambda)
+        {
+            double total = (double)area.Width * area.Height, used = 0;
+            for (int i = 0; i < n; i++) used += (double)r[i].Width * r[i].Height;
+            double score = total - used;
+            if (n > m)
+            {
+                double ratio = r[m].Width / (double)Math.Max(1, r[0].Width);
+                if (ratio < minRatio - 0.01) return double.MaxValue;          // alts smaller than the preference allows
+                score += ProportionCost(ratio, m, total, lambda);
+            }
+            return score;
+        }
+
+        // What an arrangement's main:alt proportions cost, in screen area, on top of its empty
+        // space. `ratio` is alt width / main width.
+        static double ProportionCost(double ratio, int m, double total, double lambda)
+        {
+            double cost = lambda * total * Math.Max(0, 0.5 - ratio);           // "balanced": alts under half a main cost a little
+            if (m == 1) cost += 0.6 * total * Math.Max(0, ratio - 0.5);       // a single main must clearly be the biggest window
+            else if (ratio >= 0.9) cost += 0.08 * total;                      // several mains: an even grid is fine, just not preferred
+            return cost;
+        }
+
+        static string DescribeLayout(bool lshape, string side, int m)
+        {
+            string mainWord = m > 1 ? "mains" : "main";
+            if (lshape) return "L-shape, main " + (side == "right" ? "top-right" : side == "bottom" ? "bottom-left" : "top-left");
+            switch (side)
+            {
+                case "right": return mainWord + " right, alts left";
+                case "top": return mainWord + " top, alts below";
+                case "bottom": return mainWord + " bottom, alts above";
+                default: return mainWord + " left, alts right";
+            }
+        }
+
+        // THE layout engine. Places n windows (the first `mains` are the big ones) in `area`,
+        // every one at `aspect`, with the least empty screen it can find.
+        //   side:    where the main(s) go - "left", "right", "top", "bottom", or "auto" to let
+        //            the solver decide. Right/bottom are the left/top solutions mirrored.
+        //   altPref: "balanced" (bigger alts unless that costs much space), "small" (pure least
+        //            empty space; alts may be as small as a fifth of a main), "large" (alts at
+        //            least half a main).
+        // May return more than n rects: the extras are free slots the next client would take.
+        internal static List<Rectangle> AutoLayout(int n, Rectangle area, int mains, double aspect, int gap, string side, string altPref, out string chosen)
+        {
+            chosen = "";
+            if (n <= 0) return new List<Rectangle>();
+            area = new Rectangle(area.X + gap, area.Y + gap, area.Width - 2 * gap, area.Height - 2 * gap);
+            int m = Math.Max(1, Math.Min(mains, n)), k = n - m;
+            double minRatio = altPref == "large" ? 0.5 : 0.2;
+            double lambda = altPref == "balanced" ? 0.6 : 0.0;
+
+            if (aspect <= 0)
+            {
+                // Free aspect: nothing to solve - split the screen and fill both parts.
+                if (k == 0) { chosen = "grid"; return PackFree(area, m, gap); }
+                double frac = altPref == "small" ? 0.78 : altPref == "large" ? 0.5 : 0.66;
+                string fs = side == "auto" ? (area.Width >= area.Height ? "left" : "top") : side;
+                Rectangle big, small;
+                if (fs == "top" || fs == "bottom")
+                {
+                    int bh = (int)(area.Height * frac);
+                    big = new Rectangle(area.X, area.Y, area.Width, bh - gap / 2);
+                    small = new Rectangle(area.X, area.Y + bh + gap / 2, area.Width, area.Height - bh - gap / 2);
+                }
+                else
+                {
+                    int bw = (int)(area.Width * frac);
+                    big = new Rectangle(area.X, area.Y, bw - gap / 2, area.Height);
+                    small = new Rectangle(area.X + bw + gap / 2, area.Y, area.Width - bw - gap / 2, area.Height);
+                }
+                List<Rectangle> free = PackFree(big, m, gap);
+                free.AddRange(PackFree(small, k, gap));
+                if (fs == "right") MirrorX(free, area);
+                if (fs == "bottom") MirrorY(free, area);
+                chosen = DescribeLayout(false, fs, m);
+                return free;
+            }
+
+            if (k == 0) { chosen = m == 1 ? "single window" : "grid"; return PackCells(area, m, aspect, gap, 0, 0); }
+
+            // Automatic: on a tie, one main sits on the left; several mains sit side by side on top.
+            string[] sides = side != "auto" ? new[] { side } : m == 1 ? new[] { "left", "top" } : new[] { "top", "left" };
+            List<Rectangle> best = null; double bestScore = double.MaxValue; string bestSide = "left";
+            foreach (string s in sides)
+            {
+                bool top = s == "top" || s == "bottom";
+                for (int kind = 0; kind < 2; kind++)
+                {
+                    if (kind == 1 && m != 1) continue;                         // the L only makes sense around one main
+                    List<Rectangle> r = kind == 0 ? SolveBands(area, m, k, aspect, gap, top, minRatio, lambda)
+                                                  : LShape(area, k, aspect, gap);
+                    if (r == null || r.Count < n) continue;
+                    double score = LayoutScore(r, m, n, area, minRatio, lambda);
+                    if (score < bestScore - 1) { bestScore = score; best = r; bestSide = s; chosen = DescribeLayout(kind == 1, s, m); }
+                }
+            }
+            if (best == null) { chosen = "grid"; return PackCells(area, n, aspect, gap, 0, 0); }
+            if (bestSide == "right") MirrorX(best, area);
+            if (bestSide == "bottom") MirrorY(best, area);
+            return best;
         }
 
         // ---------------- core actions ----------------
@@ -2525,9 +2447,9 @@ namespace WowTiler
         {
             if (order.Count == 0) { SetStatus("Nothing to tile."); return; }
             if (raidMode) LeaveRaidModeState();
-            double aspect = ParseAspect(cfg.Aspect);
             List<Rectangle> rects = CurrentSlots(order.Count);
-            if (rects.Count == 0) { SetStatus("The custom layout has no slots yet. Click 'Customize layout' and add some."); UpdatePreview(); return; }
+            string choice = autoChoice;
+            if (rects.Count == 0) { SetStatus("The custom layout has no slots yet. Click 'Edit custom layout' and add some."); UpdatePreview(); return; }
             while (rects.Count < order.Count)        // more clients than slots: pile the extras on the last slot
             {
                 Rectangle last = rects[rects.Count - 1];
@@ -2549,13 +2471,6 @@ namespace WowTiler
                 if (Native.IsIconic(w.Hwnd) || Native.IsZoomed(w.Hwnd)) Native.ShowWindow(w.Hwnd, Native.SW_RESTORE);
                 if (w.SetBorderless(cfg.Borderless)) Native.CommitFrame(w.Hwnd);
                 Rectangle target = rects[i];
-                bool exactCells = cfg.FillScreen || cfg.Layout == "auto" || cfg.Layout == "l_left" || cfg.Layout == "l_right" || cfg.Layout == "custom" || cfg.Layout == "mains_top" || cfg.Layout == "mains_left" || AltsOnOtherMonitor;
-                if (!exactCells)
-                {
-                    int frameW, frameH;
-                    Native.FrameSize(w.Hwnd, out frameW, out frameH);
-                    target = FitAspect(rects[i], aspect, frameW, frameH);
-                }
                 Native.Place(w.Hwnd, target, cfg.ResizeMethod);
                 placed[w.Hwnd] = target;
             }
@@ -2574,7 +2489,7 @@ namespace WowTiler
             WowWindow main = known[order[0]];
             lastTiled = DateTime.Now;
             Rectangle scr = Area();
-            string autoNote = cfg.Layout == "auto" ? "  [auto: " + ResolveAuto(order.Count, scr, cfg.MainPercent / 100.0, cfg.Gap, aspect, cfg.FillScreen, cfg.Mains).Replace("_", " ") + "]" : "";
+            string autoNote = choice.Length > 0 ? "  [" + choice + "]" : "";
             int fsCount = 0;
             foreach (IntPtr h in order) if (known[h].NeedsFix) fsCount++;
             if (fsCount > 0)
